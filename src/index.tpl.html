@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Апгрейд — тренировки</title>
+<meta name="description" content="Гибкая программа силовых тренировок v3: 2–3 тренировки в неделю, 60/90/120 минут, журнал и база упражнений.">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#f4f5f2">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Апгрейд">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="stylesheet" href="css/app.css?v=__V__">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <button class="back" id="back" hidden aria-label="Назад к разделу «Ещё»">‹ Ещё</button>
+    <div class="logo" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 512 512"><path d="M150 292 L256 186 L362 292" fill="none" stroke="currentColor" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/><path d="M170 370 H342" fill="none" stroke="currentColor" stroke-width="64" stroke-linecap="round" opacity=".55"/></svg></div>
+    <div class="grow"><h1 id="title">Сегодня</h1><div class="sub" id="sub"></div></div>
+    <span class="offline" id="offline" hidden>офлайн</span>
+    <button class="icon-btn" id="themeBtn" aria-label="Переключить тему"></button>
+  </div>
+</header>
+<main class="wrap" id="app"></main>
+<nav class="nav" aria-label="Разделы"><div class="nav-in" id="nav"></div></nav>
+<button class="fab" id="fab" aria-label="Таймер отдыха"></button>
+<div class="timer-panel" id="tPanel" role="dialog" aria-label="Таймер отдыха">
+  <div class="timer-big" id="tBig">0:00</div>
+  <div class="timer-presets">
+    <button class="btn" data-t="60">1:00</button><button class="btn" data-t="90">1:30</button>
+    <button class="btn" data-t="120">2:00</button><button class="btn" data-t="180">3:00</button>
+  </div>
+  <div class="timer-actions">
+    <button class="btn" data-plus="1">+15 с</button><button class="btn" data-stop="">Стоп</button><button class="btn ghost" data-close="">Скрыть</button>
+  </div>
+</div>
+<noscript><p style="padding:16px">Для работы программы нужен JavaScript.</p></noscript>
+<script src="js/store.js?v=__V__"></script>
+<script src="js/config.js?v=__V__"></script>
+<script src="js/program.js?v=__V__"></script>
+<script src="js/sync.js?v=__V__"></script>
+<script src="js/app.js?v=__V__"></script>
+</body>
+</html>

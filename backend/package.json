@@ -1,0 +1,17 @@
+{
+  "name": "upgrade-api",
+  "private": true,
+  "type": "module",
+  "description": "Neon Function: auth proxy + sync API for the Upgrade training PWA",
+  "dependencies": {
+    "@neon/functions": "^0.11.0",
+    "jose": "^6.0.0",
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@neon/config": "^1.9.3",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.11.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,8 @@
+vendor/
+__pycache__/
+.DS_Store
+private/
+backend/node_modules/
+backend/.env*
+backend/.neon
+.neon
