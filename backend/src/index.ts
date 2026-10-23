@@ -33,7 +33,8 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
 attachDatabasePool(pool);
 
 const jwks = JWKS_URL ? createRemoteJWKSet(new URL(JWKS_URL)) : null;
-const issuer = AUTH_BASE ? new URL(AUTH_BASE).origin : "";
+// Издатель токена — origin адреса Neon Auth; на всякий случай принимаем и полный базовый адрес.
+const issuer = AUTH_BASE ? [new URL(AUTH_BASE).origin, AUTH_BASE] : [];
 
 /* ---------------- schema ---------------- */
 const SCHEMA_SQL = `
@@ -55,7 +56,19 @@ create table if not exists app.members (
   role     text not null default 'member',
   added_at timestamptz not null default now()
 );
+-- личные заметки к программе по почте владельца; при синхронизации копируются в app.kv как srv:overlay
+create table if not exists app.private_overlays (
+  email      text primary key,
+  overlay    jsonb not null,
+  updated_at timestamptz not null default now()
+);
 `;
+const OVERLAY_SQL = `
+insert into app.kv (user_id, key, value, updated_at)
+  select $1, 'srv:overlay', o.overlay, o.updated_at from app.private_overlays o where o.email = $2
+on conflict (user_id, key) do update
+  set value = excluded.value, deleted = false, updated_at = excluded.updated_at, rev = nextval('app.kv_rev')
+  where app.kv.updated_at < excluded.updated_at`;
 let schemaReady: Promise<void> | null = null;
 function ensureSchema(): Promise<void> {
   if (!schemaReady) {
@@ -190,31 +203,31 @@ async function identify(request: Request): Promise<Identity | null> {
   }
 }
 
-const memberCache = new Map<string, { ok: boolean; at: number }>();
-async function isMember(db: PoolClient, id: Identity): Promise<boolean> {
-  const hit = memberCache.get(id.userId);
-  if (hit && Date.now() - hit.at < 60_000) return hit.ok;
-  let ok = (await db.query("select 1 from app.members where user_id = $1", [id.userId])).rowCount === 1;
-  if (!ok && MEMBER_EMAILS.length) {
-    let email = id.email;
-    if (!email) {
-      try {
-        const r = await db.query(`select lower(email) as email from neon_auth."user" where id::text = $1`, [id.userId]);
-        email = r.rows[0]?.email ?? null;
-      } catch {
-        email = null;
-      }
-    }
-    if (email && MEMBER_EMAILS.includes(email)) {
-      await db.query(
-        "insert into app.members (user_id, email, role) values ($1, $2, 'owner') on conflict (user_id) do nothing",
-        [id.userId, email],
-      );
-      ok = true;
-    }
+const memberCache = new Map<string, { ok: boolean; email: string | null; at: number }>();
+async function emailOf(db: PoolClient, id: Identity): Promise<string | null> {
+  if (id.email) return id.email;
+  try {
+    const r = await db.query(`select lower(email) as email from neon_auth."user" where id::text = $1`, [id.userId]);
+    return r.rows[0]?.email ?? null;
+  } catch {
+    return null;
   }
-  memberCache.set(id.userId, { ok, at: Date.now() });
-  return ok;
+}
+async function membership(db: PoolClient, id: Identity): Promise<{ ok: boolean; email: string | null }> {
+  const hit = memberCache.get(id.userId);
+  if (hit && Date.now() - hit.at < 60_000) return hit;
+  const email = await emailOf(db, id);
+  let ok = (await db.query("select 1 from app.members where user_id = $1", [id.userId])).rowCount === 1;
+  if (!ok && email && MEMBER_EMAILS.includes(email)) {
+    await db.query(
+      "insert into app.members (user_id, email, role) values ($1, $2, 'owner') on conflict (user_id) do nothing",
+      [id.userId, email],
+    );
+    ok = true;
+  }
+  const res = { ok, email, at: Date.now() };
+  memberCache.set(id.userId, res);
+  return res;
 }
 
 /* ---------------- /sync ---------------- */
@@ -254,7 +267,9 @@ async function handleSync(request: Request, origin: string, id: Identity): Promi
   await ensureSchema();
   const db = await pool.connect();
   try {
-    if (!(await isMember(db, id))) return fail(403, "not_member", "У этого аккаунта пока нет доступа к синхронизации", origin);
+    const m = await membership(db, id);
+    if (!m.ok) return fail(403, "not_member", "У этого аккаунта пока нет доступа к синхронизации", origin);
+    if (m.email) await db.query(OVERLAY_SQL, [id.userId, m.email]);
     let applied = 0;
     if (changes.length) {
       const r = await db.query(
@@ -287,8 +302,8 @@ async function handleMe(origin: string, id: Identity): Promise<Response> {
   await ensureSchema();
   const db = await pool.connect();
   try {
-    const member = await isMember(db, id);
-    return json({ userId: id.userId, email: id.email, member }, 200, origin);
+    const m = await membership(db, id);
+    return json({ userId: id.userId, email: m.email, member: m.ok }, 200, origin);
   } finally {
     db.release();
   }

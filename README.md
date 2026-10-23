@@ -65,7 +65,7 @@ python3 build.py        # нужны Python 3 и Node.js
 ```bash
 cd backend && npm install
 neon link --project-id <id>              # один раз
-neon deploy --env .env.local             # в файле: ALLOWED_ORIGINS, MEMBER_EMAILS
+neon deploy --env deploy.env              # в файле: ALLOWED_ORIGINS, MEMBER_EMAILS (не в git)
 neon functions get api                   # invocation_url → src/app-config.json
 ```
 

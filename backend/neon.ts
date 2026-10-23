@@ -1,6 +1,6 @@
 /**
  * Инфраструктура Neon для «Апгрейда» (Lakebase Postgres + Neon Auth + Function).
- *   neon deploy --env .env.local   — применить (нужны ALLOWED_ORIGINS и MEMBER_EMAILS в файле)
+ *   neon deploy --env deploy.env    — применить (в файле: ALLOWED_ORIGINS, MEMBER_EMAILS, ALLOW_LOCALHOST)
  *   neon status                    — что сейчас развёрнуто
  */
 import { defineConfig } from "@neon/config/v1";

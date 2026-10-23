@@ -90,7 +90,15 @@
     let data = null;
     try { data = await res.json(); } catch (e) { /* пустой ответ */ }
     if (!res.ok) {
-      const msg = (data && (data.message || data.error)) || "Ошибка " + res.status;
+      const RU = {
+        INVALID_OTP: "Неверный код — проверь цифры из письма",
+        OTP_EXPIRED: "Код устарел — запроси новый",
+        TOO_MANY_ATTEMPTS: "Слишком много попыток — запроси новый код",
+        INVALID_EMAIL: "Проверь адрес почты",
+        INVALID_ORIGIN: "Вход с этого адреса сайта не разрешён"
+      };
+      const msg = (data && RU[data.code]) || (res.status === 429 ? "Слишком часто — подожди минуту и попробуй снова" : "") ||
+        (data && (data.message || data.error)) || "Ошибка " + res.status;
       throw new SyncError(res.status === 429 ? "rate" : res.status === 401 ? "signedout" : "auth", msg, res.status, data);
     }
     return data;
