@@ -28,6 +28,7 @@ docs/                    готовое приложение — его разд
 src/                     исходники
   data.js                публичная программа: упражнения, блоки, тренировки, тексты, источники
   ds-map.json            связь упражнений программы с базой exercises-dataset
+  ds-names-ru.json       русские названия всех 1324 упражнений базы (id → название; сборка проверяет полноту)
   app-config.json        адрес Neon Function
   app.js, store.js, sync.js, charts.js, style.css, index.tpl.html, sw.tpl.js, manifest.webmanifest, icons/
 backend/                 Neon Function (TypeScript) и neon.ts
@@ -80,5 +81,5 @@ neon functions get api                   # invocation_url → src/app-config.jso
 ## Источники и лицензии
 
 - Обоснование программы — «Ещё → Почему так» (43 исследования со ссылками).
-- База упражнений: [hasaneyldrm/exercises-dataset](https://github.com/hasaneyldrm/exercises-dataset). Данные (названия, мышцы, оборудование, инструкции) — MIT, см. `THIRD_PARTY_NOTICES.md`.
+- База упражнений: [hasaneyldrm/exercises-dataset](https://github.com/hasaneyldrm/exercises-dataset). Данные (названия, мышцы, оборудование, инструкции) — MIT, см. `THIRD_PARTY_NOTICES.md`. Русские названия упражнений переведены для этого проекта (`src/ds-names-ru.json`).
 - Анимации упражнений — © Gym visual (https://gymvisual.com/). В репозиторий они **не** включены; приложение подгружает их по ссылке из исходного репозитория, только если пользователь сам включит это в настройках.

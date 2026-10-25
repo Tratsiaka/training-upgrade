@@ -55,7 +55,15 @@ if private_src.exists():
 raw = json.loads(DATASET.read_text(encoding="utf-8"))
 by_id = {x["id"]: x for x in raw}
 clean = lambda s: s.replace("в°", "°")
-items = [{"id": x["id"], "n": clean(x["name"]), "bp": x["body_part"], "eq": x["equipment"], "t": x["target"],
+# В базе названия только на английском; русские ведём сами (src/ds-names-ru.json, id → название).
+names_ru = json.loads((src / "ds-names-ru.json").read_text(encoding="utf-8"))
+no_ru = [x["id"] for x in raw if not names_ru.get(x["id"], "").strip()]
+if no_ru:
+    raise SystemExit(f"нет русского названия в ds-names-ru.json для {len(no_ru)} упражнений: {no_ru[:10]}…")
+stale = sorted(set(names_ru) - set(by_id))
+if stale:
+    print(f"warning: в ds-names-ru.json есть id, которых нет в базе: {stale[:10]}")
+items = [{"id": x["id"], "n": clean(x["name"]), "r": names_ru[x["id"]], "bp": x["body_part"], "eq": x["equipment"], "t": x["target"],
           "sec": x.get("secondary_muscles") or [], "s": x["instruction_steps"]["ru"], "m": x["media_id"]} for x in raw]
 lib = {"v": 1, "source": "https://github.com/hasaneyldrm/exercises-dataset",
        "license": "MIT (данные). Медиа — © Gym visual — https://gymvisual.com/, в файл не включены.", "items": items}
@@ -69,7 +77,7 @@ for ex_id, ex in program["exercises"].items():
         missing.append(ex_id)
     if did:
         x = by_id[did]
-        ex["ds"] = {"id": did, "n": clean(x["name"]), "s": x["instruction_steps"]["ru"], "m": f'{did}-{x["media_id"]}'}
+        ex["ds"] = {"id": did, "n": clean(x["name"]), "nr": names_ru[did], "s": x["instruction_steps"]["ru"], "m": f'{did}-{x["media_id"]}'}
 if missing:
     raise SystemExit(f"нет в ds-map.json: {missing}")
 
@@ -85,13 +93,15 @@ files = {
     "js/charts.js": (src / "charts.js").read_text(encoding="utf-8"),
     "js/app.js": (src / "app.js").read_text(encoding="utf-8"),
 }
-version = hashlib.sha1("".join(files[k] for k in sorted(files)).encode()).hexdigest()[:8]
+lib_json = json.dumps(lib, ensure_ascii=False, separators=(",", ":"))
+# База тоже входит в версию: иначе после правки одних названий service worker отдавал бы старую копию.
+version = hashlib.sha1(("".join(files[k] for k in sorted(files)) + lib_json).encode()).hexdigest()[:8]
 
 for path, text in files.items():
     (dist / path).write_text(text, encoding="utf-8")
 (dist / "index.html").write_text((src / "index.tpl.html").read_text(encoding="utf-8").replace("__V__", version), encoding="utf-8")
 (dist / "sw.js").write_text((src / "sw.tpl.js").read_text(encoding="utf-8").replace("__V__", version), encoding="utf-8")
-(dist / "data" / "exercises-ru.json").write_text(json.dumps(lib, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+(dist / "data" / "exercises-ru.json").write_text(lib_json, encoding="utf-8")
 (dist / "data" / "program.json").write_text(json.dumps(program, ensure_ascii=False, indent=1), encoding="utf-8")
 shutil.copy(src / "manifest.webmanifest", dist / "manifest.webmanifest")
 shutil.copy(root / "THIRD_PARTY_NOTICES.md", dist / "THIRD_PARTY_NOTICES.md")

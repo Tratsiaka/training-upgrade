@@ -219,10 +219,11 @@
   }
   function dsHTML(ex) {
     if (!ex.ds) return "";
-    const d = ex.ds;
-    return `<div class="ds"><div class="how-sub">Пошагово — база упражнений <span class="muted">(${esc(d.n)})</span></div>
+    const d = ex.ds, name = d.nr || d.n;
+    return `<div class="ds"><div class="how-sub">Пошагово — база упражнений <span class="muted">(${esc(name)})</span></div>
       <ol>${d.s.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>
-      ${mediaBlock(d.m, d.n)}</div>`;
+      ${d.nr ? `<div class="small muted en">Оригинал: <span lang="en">${esc(d.n)}</span></div>` : ""}
+      ${mediaBlock(d.m, name)}</div>`;
   }
 
   /* ---------- render: shared ---------- */
@@ -655,35 +656,61 @@
   const LIB = { items: null, loading: false, error: null, q: "", bp: "all", eq: "all", limit: 40 };
   const progByDs = {};
   Object.values(EX).forEach((e) => { if (e.ds) (progByDs[e.ds.id] = progByDs[e.ds.id] || []).push(e.n); });
+  // ?v= из адреса скрипта: база кэшируется вместе с версией сборки и не залипает старой копией.
+  const BUILD_V = (() => { try { return new URL(document.currentScript.src).searchParams.get("v") || ""; } catch (e) { return ""; } })();
+  const fold = (s) => String(s || "").toLowerCase().replace(/ё/g, "е");
+  // Грубая основа слова: «гантели» находит «гантелями», «штанги» — «штангой», «лежа» — «лёжа».
+  const stem = (w) => { const s = w.replace(/[аяыиоеуюйьэ]+$/, ""); return s.length >= 3 ? s : w; };
+  const libName = (x) => x.r || x.n;
+  const sortKey = (x) => libName(x).replace(/^[«"“(]+/, "");
   function loadLib() {
     if (LIB.items || LIB.loading) return;
     LIB.loading = true;
-    fetch("data/exercises-ru.json").then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-      .then((j) => { LIB.items = j.items; LIB.loading = false; if (state.tab === "library") render(); })
+    fetch("data/exercises-ru.json" + (BUILD_V ? "?v=" + BUILD_V : "")).then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then((j) => {
+        LIB.items = j.items.map((x) => Object.assign(x, {
+          _r: fold(libName(x)), _n: fold(x.n), _t: fold(ru(MU_RU, x.t)),
+          _w: " " + fold(libName(x)).replace(/[«»"(),\-]/g, " "),
+          _h: fold(`${ru(BP_RU, x.bp)} ${ru(MU_RU, x.t)} ${ru(EQ_RU, x.eq)} ${x.sec.map((m) => ru(MU_RU, m)).join(" ")} ${(progByDs[x.id] || []).join(" ")}`),
+        })).sort((a, b) => sortKey(a).localeCompare(sortKey(b), "ru"));
+        LIB.loading = false; if (state.tab === "library") render();
+      })
       .catch((e) => { LIB.loading = false; LIB.error = String(e.message || e); if (state.tab === "library") render(); });
   }
+  // Поиск по русскому и английскому названию, мышцам, оборудованию; «е» находит «ё».
+  // Порядок: название начинается с запроса → запрос с начала слова → все слова в названии с начала слов →
+  // все слова где-то в названии («жим» внутри «отжиманий») → английское название → остальное
+  // (по доле слов в названии и совпадению целевой мышцы).
   function libFiltered() {
-    const q = LIB.q.trim().toLowerCase();
-    return LIB.items.filter((x) => {
-      if (LIB.bp === "prog" && !progByDs[x.id]) return false;
-      if (LIB.bp !== "all" && LIB.bp !== "prog" && x.bp !== LIB.bp) return false;
-      if (LIB.eq !== "all" && x.eq !== LIB.eq) return false;
-      if (!q) return true;
-      const hay = `${x.n} ${ru(BP_RU, x.bp)} ${ru(MU_RU, x.t)} ${ru(EQ_RU, x.eq)} ${x.sec.map((m) => ru(MU_RU, m)).join(" ")} ${(progByDs[x.id] || []).join(" ")}`.toLowerCase();
-      return q.split(/\s+/).every((w) => hay.includes(w));
+    const q = fold(LIB.q.trim()).replace(/\s+/g, " "), words = q ? q.split(" ").map(stem) : [];
+    const out = [];
+    LIB.items.forEach((x) => {
+      if (LIB.bp === "prog" && !progByDs[x.id]) return;
+      if (LIB.bp !== "all" && LIB.bp !== "prog" && x.bp !== LIB.bp) return;
+      if (LIB.eq !== "all" && x.eq !== LIB.eq) return;
+      if (!words.length) { out.push([0, x]); return; }
+      const hay = `${x._r} ${x._n} ${x._h}`;
+      if (!words.every((w) => hay.includes(w))) return;
+      const inName = words.filter((w) => x._r.includes(w)).length;
+      const rank = x._r.startsWith(q) ? 0 : x._w.includes(" " + q) ? 1 : words.every((w) => x._w.includes(" " + w)) ? 2
+        : inName === words.length ? 2.5 : x._n.includes(q) ? 3
+        : 4 + (words.length - inName) / words.length + (words.some((w) => x._t.includes(w)) ? 0 : 0.5);
+      out.push([rank, x]);
     });
+    return out.sort((a, b) => a[0] - b[0]).map((p) => p[1]);
   }
   function libRow(x) {
     const inProg = progByDs[x.id];
     return `<div class="lib-row" data-libid="${x.id}" role="button" tabindex="0" aria-expanded="false">
-      <div class="lib-n">${esc(x.n)}${inProg ? ` <span class="tag">в программе</span>` : ""}</div>
+      <div class="lib-n">${esc(libName(x))}${inProg ? ` <span class="tag">в программе</span>` : ""}</div>
       <div class="lib-m">${esc(ru(MU_RU, x.t))} · ${esc(ru(EQ_RU, x.eq))}${inProg ? ` · ${esc(inProg.join(", "))}` : ""}</div></div>`;
   }
   function libDetail(x) {
     return `<div class="lib-d">
       <div class="small muted">Зона: ${esc(ru(BP_RU, x.bp))} · цель: ${esc(ru(MU_RU, x.t))}${x.sec.length ? ` · помогают: ${esc(x.sec.map((m) => ru(MU_RU, m)).join(", "))}` : ""} · ${esc(ru(EQ_RU, x.eq))}</div>
       <ol>${x.s.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>
-      ${mediaBlock(`${x.id}-${x.m}`, x.n)}</div>`;
+      ${x.r ? `<div class="small muted en">Оригинал: <span lang="en">${esc(x.n)}</span></div>` : ""}
+      ${mediaBlock(`${x.id}-${x.m}`, libName(x))}</div>`;
   }
   function libListHTML() {
     if (!LIB.items) return LIB.error ? `<div class="empty">Не получилось загрузить базу (${esc(LIB.error)}). При первом открытии нужна сеть.</div>` : `<div class="empty">Загружаю базу упражнений…</div>`;
@@ -698,12 +725,12 @@
     const eqs = ["all"].concat(Object.keys(EQ_RU));
     return `
       <div class="lib-tools">
-        <input type="search" class="search" placeholder="Поиск: bench, тяга, бицепс, гантели…" value="${esc(LIB.q)}" data-libq="1" aria-label="Поиск упражнения">
+        <input type="search" class="search" placeholder="Поиск: жим лёжа, тяга, бицепс, bench…" value="${esc(LIB.q)}" data-libq="1" aria-label="Поиск упражнения">
         <div class="chips">${bps.map(([k, n]) => `<button class="chip ${LIB.bp === k ? "on" : ""}" data-libbp="${k}">${n}</button>`).join("")}</div>
         <select data-libeq="1" aria-label="Оборудование">${eqs.map((k) => `<option value="${esc(k)}" ${LIB.eq === k ? "selected" : ""}>${k === "all" ? "Любое оборудование" : esc(ru(EQ_RU, k))}</option>`).join("")}</select>
       </div>
       <div id="libList">${libListHTML()}</div>
-      <p class="small muted" style="margin-top:14px">База: <a href="https://github.com/hasaneyldrm/exercises-dataset" target="_blank" rel="noopener">exercises-dataset</a> — 1324 упражнения, инструкции на русском (данные по лицензии MIT). Анимации — ${GV}; в приложение не скопированы и подгружаются по ссылке, только если ты их включишь.</p>`;
+      <p class="small muted" style="margin-top:14px">База: <a href="https://github.com/hasaneyldrm/exercises-dataset" target="_blank" rel="noopener">exercises-dataset</a> — 1324 упражнения, инструкции на русском (данные по лицензии MIT). Названия перевели для приложения, искать можно и по-английски. Анимации — ${GV}; в приложение не скопированы и подгружаются по ссылке, только если ты их включишь.</p>`;
   }
 
   /* ---------- tabs: static ---------- */

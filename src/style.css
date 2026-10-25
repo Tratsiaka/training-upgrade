@@ -293,6 +293,7 @@ details.tbl summary{cursor:pointer;font-size:13px;color:var(--muted);margin:2px 
 .lib-d{background:var(--surface-2);border:1px solid var(--accent);border-top:0;border-radius:0 0 12px 12px;padding:8px 12px 10px;margin:0 0 6px;font-size:14px}
 .lib-d ol{margin:6px 0 0;padding-left:18px}
 .lib-d li{margin-bottom:4px}
+.lib-d .en,.ds .en{margin:6px 0 2px}
 
 /* More */
 .menu{display:grid;gap:8px;margin-top:12px}
