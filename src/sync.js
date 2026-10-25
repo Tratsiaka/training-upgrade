@@ -117,6 +117,8 @@
     settings: { kind: "whole" },
     swaps: { kind: "whole" },
     goals: { kind: "whole" },
+    cycle: { kind: "whole" },
+    adjust: { kind: "whole" },
     logs: { kind: "map", prefix: "log:" },
     meas: { kind: "list", prefix: "meas:", id: (m) => (m && m.date ? String(m.date) : "") }
   };

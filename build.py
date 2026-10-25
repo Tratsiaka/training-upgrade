@@ -82,6 +82,7 @@ files = {
     "js/config.js": config_js,
     "js/program.js": prog_js,
     "js/sync.js": (src / "sync.js").read_text(encoding="utf-8"),
+    "js/charts.js": (src / "charts.js").read_text(encoding="utf-8"),
     "js/app.js": (src / "app.js").read_text(encoding="utf-8"),
 }
 version = hashlib.sha1("".join(files[k] for k in sorted(files)).encode()).hexdigest()[:8]

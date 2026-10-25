@@ -5,7 +5,7 @@ const MEDIA_CACHE = "upg-media";
 const MEDIA_MAX = 150;
 const CORE = [
   "./", "index.html", "manifest.webmanifest",
-  "css/app.css?v=__V__", "js/store.js?v=__V__", "js/config.js?v=__V__", "js/program.js?v=__V__", "js/sync.js?v=__V__", "js/app.js?v=__V__",
+  "css/app.css?v=__V__", "js/store.js?v=__V__", "js/config.js?v=__V__", "js/program.js?v=__V__", "js/sync.js?v=__V__", "js/charts.js?v=__V__", "js/app.js?v=__V__",
   "icons/favicon.svg", "icons/favicon-32.png", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"
 ];
 

@@ -2,6 +2,8 @@
 
 Личное веб-приложение с программой силовых тренировок v3: 2–3 тренировки в неделю, режимы на 60, 90 и 120 минут, три блока по 5 недель, журнал подходов и замеров, база из 1324 упражнений. Работает офлайн, ставится на телефон как приложение и синхронизирует данные через Neon (Postgres + Neon Auth + Neon Function).
 
+Дни тренировок выбираешь сам, неделя программы закрывается по выполнению, циклом нагрузки можно управлять вручную. В журнале — графики прогресса, объёма и замеров. Данные выгружаются для анализа агентом, а его корректировки программы импортируются обратно с предпросмотром. Что дальше — в [ROADMAP.md](ROADMAP.md).
+
 ## Установка на телефон
 
 - **iPhone:** открой сайт в Safari → «Поделиться» → «На экран „Домой“».
@@ -17,6 +19,7 @@ docs/                    готовое приложение — его разд
   js/config.js           адрес API (сгенерировано из src/app-config.json)
   js/program.js          программа + шаги из базы упражнений (сгенерировано)
   js/sync.js             вход по коду из письма и синхронизация с базой
+  js/charts.js           графики (SVG без библиотек)
   js/app.js              интерфейс
   data/program.json      программа в JSON — для будущего бэкенда
   data/exercises-ru.json база упражнений (выжимка exercises-dataset)
@@ -26,9 +29,10 @@ src/                     исходники
   data.js                публичная программа: упражнения, блоки, тренировки, тексты, источники
   ds-map.json            связь упражнений программы с базой exercises-dataset
   app-config.json        адрес Neon Function
-  app.js, store.js, sync.js, style.css, index.tpl.html, sw.tpl.js, manifest.webmanifest, icons/
+  app.js, store.js, sync.js, charts.js, style.css, index.tpl.html, sw.tpl.js, manifest.webmanifest, icons/
 backend/                 Neon Function (TypeScript) и neon.ts
 build.py                 сборка src/ → docs/
+ROADMAP.md               план развития и форматы данных
 private/                 личная версия программы — в git не попадает (см. ниже)
 ```
 
