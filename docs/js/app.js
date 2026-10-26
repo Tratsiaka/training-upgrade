@@ -6,6 +6,10 @@
   // Личные заметки (приходят из базы после входа) накладываются на публичную программу до первого рендера.
   if (SY && SY.overlay()) { try { SY.applyOverlay(P, SY.overlay()); } catch (e) { console.error(e); } }
   const EX = P.exercises;
+  // Правки программы (plan.js): изменённые тренировки и упражнения из базы. Создаётся после S.init().
+  let PM = null;
+  const sessOf = (key) => (PM ? PM.sess(key) : P.sessions[key]);
+  const isStrength = (g) => window.PlanModel.isStrength(g);
   const MEDIA = "https://raw.githubusercontent.com/hasaneyldrm/exercises-dataset/main/";
   const GV = "© Gym visual — gymvisual.com";
 
@@ -107,7 +111,14 @@
     const p = posOfIdx(idx);
     const anyLog = Object.keys(state.logs).some((k) => entryHasData(state.logs[k]));
     const pre = !anyLog && cyc.idx === 0 && daysBetween(today, state.settings.start) > 0;
-    return { idx, next, done, closed, cyc, pre, block: p.block, week: p.week, n: p.n, cycle: p.cycle, day, time: +state.time, low: state.ready === "low", light: p.week === 5, heavy: p.week === 1 || p.week === 3 };
+    return { idx, next, done, closed, cyc, pre, block: p.block, week: p.week, n: p.n, cycle: p.cycle, day, time: +state.time, low: state.ready === "low", light: p.week === 5, heavy: p.week === 1 || p.week === 3, now: true };
+  }
+  /* Замены «только сегодня»: { d: дата, m: { "A|legpress": "hack" } } — локально, на следующий день пропадают. */
+  function daySwaps() { const v = S.get("daySw", null); return v && v.d === todayISO() && v.m ? v.m : {}; }
+  function setDaySwap(day, planned, exId) {
+    const m = Object.assign({}, daySwaps()), k = `${day}|${planned}`;
+    if (!exId || exId === planned) delete m[k]; else m[k] = exId;
+    S.set("daySw", { d: todayISO(), m });
   }
 
   /* ---------- logs ---------- */
@@ -176,7 +187,7 @@
   }
   function resolveItem(it, ctx, slotKey) {
     let b = it, variant = null;
-    if (it.hl) { b = Object.assign({ ex: it.ex }, ctx.heavy ? it.hl.heavy : it.hl.light); variant = ctx.heavy ? "тяжёлый жим" : "лёгкий жим"; }
+    if (it.hl) { b = Object.assign({ ex: it.ex, orig: it.orig }, ctx.heavy ? it.hl.heavy : it.hl.light); variant = ctx.heavy ? "тяжёлая неделя" : "лёгкая неделя"; }
     if (it.weekAlt) b = Object.assign({}, it.weekAlt[ctx.heavy ? 0 : 1]);
     const adj = adjFor(b.ex, String(slotKey).split("-")[0]);
     if (adj) {
@@ -188,13 +199,15 @@
     }
     let exId = adj && adj.replace_with && EX[adj.replace_with] ? adj.replace_with : b.ex;
     const sw = state.swaps[slotKey];
-    if (sw && (EX[b.ex].alts || []).concat(b.ex).includes(sw)) exId = sw;
+    if (sw && EX[b.ex] && (EX[b.ex].alts || []).concat(b.ex).includes(sw)) exId = sw;
+    const planned = exId;
+    if (ctx.now) { const t = daySwaps()[`${ctx.day}|${planned}`]; if (t && EX[t]) exId = t; }
     let sets = b.sets, reps = b.reps, rir = b.rir, myo = !!b.myo;
     if (myo) {
       if (ctx.light || ctx.low) { myo = false; sets = 2; reps = "12–15"; rir = ctx.light ? "3–4" : "2"; }
     } else if (ctx.light) { sets = Math.max(2, sets - 1); if (rir != null) rir = "3–4"; }
     else if (ctx.low && sets >= 3) { sets -= 1; rir = bumpRIR(rir, 1); }
-    return { exId, baseId: b.ex, sets, reps, rir, myo, note: b.note || null, variant, tempo: b.tempo || null, adj };
+    return { exId, planned, baseId: b.ex, orig: b.orig || null, sets, reps, rir, myo, note: b.note || null, variant, tempo: b.tempo || null, adj };
   }
   function tiersFor(ctx) {
     const t = ctx.time <= 60 ? ["core"] : ctx.time <= 90 ? ["core", "std"] : ["core", "std", "max"];
@@ -228,7 +241,13 @@
 
   /* ---------- render: shared ---------- */
   const TIER = { core: "ядро", std: "90+", max: "120" };
-  const KIND = { pair: "Суперсет", tri: "Тройка по кругу", circuit: "Круг" };
+  const nb = (t) => esc(t).replace(/ /g, "&nbsp;");
+  const KIND = { pair: "Суперсет", tri: "Тройка по кругу", circuit: "Круг", single: "Одно упражнение" };
+  function kindLabel(g, ctx) {
+    if (g.kind === "circuit") return `${KIND.circuit} × ${ctx && ctx.light ? 2 : g.rounds || 3}`;
+    if (g.kind === "giant") return `Круг из ${g.items.length}`;
+    return KIND[g.kind] || "Связка";
+  }
 
   function skillCard(block, week, title) {
     const sk = P.blocks[block - 1].skill;
@@ -293,10 +312,11 @@
     return w ? `Цель: ${fmtNum(w)} кг, добавь повтор там, где было меньше ${hi}.` : `Цель: добавь повтор там, где было меньше ${hi}.`;
   }
 
-  function itemHTML(it, code, ctx, slotKey) {
+  function itemHTML(it, code, ctx, slotKey, slot) {
     const r = resolveItem(it, ctx, slotKey);
     const ex = EX[r.exId];
     if (!ex) return "";
+    const todaySw = r.exId !== r.planned;
     const side = ex.side ? " на сторону" : "";
     let scheme;
     if (r.myo) scheme = `${r.sets} ${r.sets === 1 ? "майо-подход" : "майо-подхода"} <span class="rir">· 12–20 до отказа, затем мини-подходы по 3–5 через 15 с</span>`;
@@ -305,13 +325,14 @@
     const tags = [];
     if (r.variant) tags.push(`<span class="tag">${esc(r.variant)}</span>`);
     if (r.adj) tags.push(`<span class="tag adj" title="${esc(r.adj.why || r.adj.title)}">корректировка</span>`);
+    if (!todaySw && r.orig && EX[r.orig]) tags.push(`<span class="tag mine" title="${esc(`В программе было: ${EX[r.orig].n}`)}">ваша замена</span>`);
+    if (it.add) tags.push(`<span class="tag mine">добавлено</span>`);
     if (prio) tags.push(`<span class="tag">★ приоритет</span>`);
     (ex.tags || []).forEach((t) => tags.push(`<span class="tag">${esc(t)}</span>`));
-    const opts = [r.baseId].concat(EX[r.baseId].alts || []);
-    if (!opts.includes(r.exId)) opts.push(r.exId);
-    const swapped = r.exId !== r.baseId;
-    const swap = opts.length > 1 ? `<select class="swap ${swapped ? "on" : ""}" data-swap="${esc(slotKey)}" aria-label="Замена упражнения">${opts.map((id) => `<option value="${id}" ${id === r.exId ? "selected" : ""}>${id === r.baseId ? (swapped ? "↩ Вернуть: " + esc(EX[id].n) : "⇄ Замена") : esc(EX[id].n)}</option>`).join("")}</select>` : "";
-    const how = `<div class="how-b pane" data-pane="how" hidden><div class="how-sub">Важно для тебя</div><ul>${(ex.cues || []).map((c) => `<li>${rich(c)}</li>`).join("")}</ul>${ex.why ? `<div class="why">${rich(ex.why)}</div>` : ""}${dsHTML(ex)}</div>`;
+    const swap = slot ? `<button class="lnk swap-b" data-rep="${esc(slot)}" aria-label="Заменить упражнение">⇄ Замена</button>` : "";
+    const swapNote = todaySw && EX[r.planned] ? `<div class="ex-note swap-note">Сегодня вместо «${esc(EX[r.planned].n)}» · <button class="lnk small" data-repback="${esc(slot)}">вернуть</button></div>` : "";
+    const cues = (ex.cues || []).length ? `<div class="how-sub">Важно для тебя</div><ul>${ex.cues.map((c) => `<li>${rich(c)}</li>`).join("")}</ul>` : "";
+    const how = `<div class="how-b pane" data-pane="how" hidden>${cues}${ex.why ? `<div class="why">${rich(ex.why)}</div>` : ""}${dsHTML(ex)}</div>`;
 
     const key = logKey(todayISO(), ctx.day);
     const todayE = state.logs[key] || {};
@@ -339,6 +360,7 @@
     return `<div class="ex">
       <div class="ex-h"><span class="code">${code}</span><div class="ex-main">
         <div class="ex-name">${esc(ex.n)}</div>
+        ${swapNote}
         <div class="scheme">${scheme}</div>
         ${r.note ? `<div class="ex-note">${esc(r.note)}</div>` : ""}
         ${r.adj && r.adj.why ? `<div class="ex-note adj-why">${esc(r.adj.title)}: ${esc(r.adj.why)}</div>` : ""}
@@ -347,7 +369,7 @@
       </div></div></div>`;
   }
 
-  function groupHTML(g, ctx, sessKey) {
+  function groupHTML(g, ctx, sessKey, gi, letter) {
     const tier = `<span class="tier ${g.tier}">${TIER[g.tier]}</span>`;
     if (g.kind === "warmup") {
       const lines = g.items.map((it) => {
@@ -364,9 +386,9 @@
       : `<section class="group"><div class="group-h"><span class="gl">♥</span><div class="gt"><b>Мотор</b> · VO₂max</div>${tier}</div><div class="group-b"><div class="ex">${n4Proto(ctx)}</div></div></section>`;
     if (g.kind === "z2") return `<section class="group"><div class="group-h"><span class="gl">~</span><div class="gt"><b>Кардио</b> · зона 2</div>${tier}</div><div class="group-b"><div class="ex">${z2Proto()}</div></div></section>`;
     if (g.kind === "skill") return `<section class="group"><div class="group-h"><span class="gl">✦</span><div class="gt"><b>Навык</b> · 5 мин</div>${tier}</div><div class="group-b"><div class="ex">${skillCard(ctx.block, ctx.week, "Практика")}</div></div></section>`;
-    const label = g.kind === "circuit" ? `${KIND.circuit} × ${ctx.light ? 2 : g.rounds}` : KIND[g.kind];
-    const items = g.items.map((it, i) => itemHTML(it, `${g.id}${i + 1}`, ctx, `${sessKey}-${g.id}-${i}`)).join("");
-    return `<section class="group"><div class="group-h"><span class="gl">${g.id}</span><div class="gt"><b>${label}</b>${g.rest ? ` · отдых ${esc(g.rest)}` : ""}</div>${tier}</div><div class="group-b">${items}</div></section>`;
+    const L = letter || g.id;
+    const items = g.items.map((it, i) => itemHTML(it, `${L}${i + 1}`, ctx, `${sessKey}-${g.id}-${i}`, `${sessKey}:${gi}:${i}`)).join("");
+    return `<section class="group"><div class="group-h"><span class="gl">${esc(L)}</span><div class="gt"><b>${esc(kindLabel(g, ctx))}</b>${g.rest ? ` · отдых&nbsp;${nb(g.rest)}` : ""}</div>${tier}</div><div class="group-b">${items}</div></section>`;
   }
 
   function restSec(str) {
@@ -413,7 +435,7 @@
     const ctx = ctxNow();
     const blk = P.blocks[ctx.block - 1];
     const sessKey = `${ctx.block}${ctx.day}`;
-    const sess = P.sessions[sessKey];
+    const sess = sessOf(sessKey);
     const wd = new Date().getDay();
     const banners = [updateBanner(), installBanner(), undoBanner()];
     const pd = plannedDays(), hasToday = ["A", "B", "C"].some((d) => entryHasData(state.logs[logKey(todayISO(), d)]));
@@ -431,7 +453,8 @@
       return `<button data-day="${d}" class="${ctx.day === d ? "on" : ""}">${d}${ok}<small>${sub}</small></button>`;
     };
     const timeBtn = (t) => `<button data-time="${t}" class="${ctx.time === t ? "on" : ""}">${t}<small>мин</small></button>`;
-    const groups = sess.groups.filter((g) => groupVisible(g, ctx)).map((g) => groupHTML(g, ctx, sessKey)).join("");
+    const letters = PM.letters(sess.groups);
+    const groups = sess.groups.map((g, gi) => (groupVisible(g, ctx) ? groupHTML(g, ctx, sessKey, gi, letters[gi]) : "")).join("");
 
     return `
       ${banners.join("")}
@@ -446,7 +469,8 @@
         </div>
       </div>
       ${sess.note && ctx.day === "C" ? `<div class="banner">${esc(sess.note)}</div>` : ""}
-      <div class="sess-head"><h2>${ctx.day} · ${esc(sess.title)}</h2><span class="sess-time">≈ ${estMinutes(sess, ctx, sessKey)} мин</span></div>
+      <div class="sess-head"><h2>${ctx.day} · ${esc(sess.title)}</h2><span class="sess-time">≈ ${estMinutes(sess, ctx, sessKey)} мин · <button class="lnk" data-planedit="${sessKey}">Изменить</button></span></div>
+      ${PM.edited(sessKey) ? `<p class="small muted mine-note">Твоя версия тренировки — изменена в «Плане».</p>` : ""}
       <div class="weekbar"><span>Блок ${ctx.block} · неделя ${ctx.week} из 5${ctx.light ? " · разгрузка" : ""}</span><button class="lnk" data-tab="plan" data-cycfocus="1">Управлять циклом</button></div>
       ${groups}
       ${checkinHTML(ctx)}
@@ -500,7 +524,7 @@
     const vol = {};
     const add = (m, k, v) => { vol[m] = vol[m] || { d: 0, i: 0 }; vol[m][k] += v; };
     ["A", "B"].concat(withSat ? ["C"] : []).forEach((day) => {
-      P.sessions[`${block}${day}`].groups.forEach((g) => {
+      sessOf(`${block}${day}`).groups.forEach((g) => {
         if (!g.items || g.kind === "warmup" || g.tier === "max") return;
         g.items.forEach((it) => {
           const b = it.hl ? Object.assign({ ex: it.ex }, it.hl.heavy) : it.weekAlt ? it.weekAlt[0] : it;
@@ -617,40 +641,592 @@
     return "";
   }
 
+  /* План: три вкладки. «Тренировки» — программа по блокам и дням с правкой; «Расписание» — дни недели и цикл;
+     «О программе» — блоки и цели, объём по мышцам, пояснения. */
+  const PT = [["train", "Тренировки"], ["sched", "Расписание"], ["about", "О программе"]];
+  const planKey = () => `${state.pb}${state.pd}`;
   function renderPlan() {
     const ctx = ctxNow();
+    const pt = state.ptab || "train";
+    const tabs = `<div class="ptabs-wrap"><div class="seg ptabs" role="tablist" aria-label="Разделы плана">${PT.map(([k, n]) => `<button data-ptab="${k}" class="${pt === k ? "on" : ""}" role="tab" aria-selected="${pt === k}">${n}</button>`).join("")}</div></div>`;
+    return tabs + (pt === "sched" ? planSched(ctx) : pt === "about" ? planAbout(ctx) : planTrain(ctx));
+  }
+  function planCtx(b, d, cur) {
+    return { block: b, week: b === cur.block ? cur.week : 1, day: d, time: 120, low: false, light: false, heavy: true, plan: true };
+  }
+  function schemeText(p, ex) {
+    if (p.myo) return `${p.sets} ${plural(p.sets, "майо-подход", "майо-подхода", "майо-подходов")}`;
+    const side = ex && ex.side ? " на сторону" : "";
+    return `${p.sets} × ${esc(p.reps || "—")}${side}${p.rir != null && p.rir !== "" ? ` · RIR ${esc(p.rir)}` : ""}${p.tempo ? ` · ${esc(p.tempo)}` : ""}`;
+  }
+  const exName = (id) => (EX[id] ? EX[id].n : id);
+  function musclesText(id) {
+    const e = EX[id]; if (!e || !e.m) return "";
+    const nm = (m) => (P.muscles[m] ? P.muscles[m].n.toLowerCase() : "");
+    const p = e.m.p.map(nm).filter(Boolean), s = e.m.s.map(nm).filter(Boolean);
+    return p.join(", ") + (s.length ? ` · помогают: ${s.join(", ")}` : "");
+  }
+  function prowHTML(key, it, gi, ii, code) {
+    const vs = PM.variants(it), first = EX[vs[0].ex] || {};
+    const title = it.weekAlt ? vs.map((v) => exName(v.ex)).join(" / ") : exName(vs[0].ex);
+    const lines = vs.length > 1
+      ? vs.map((v) => `<span class="pr-s"><span class="pr-v">${esc(v.label)}:</span> ${schemeText(v.p, EX[v.ex])}</span>`).join("")
+      : `<span class="pr-s">${schemeText(it, first)}</span>`;
+    const notes = vs.map((v) => v.p.note).filter(Boolean);
+    const tags = [];
+    if (vs.some((v) => PM.exHolder(it, v.key).orig)) tags.push(`<span class="tag mine">ваша замена</span>`);
+    if (it.add) tags.push(`<span class="tag mine">добавлено</span>`);
+    else if (it.chg) tags.push(`<span class="tag mine">изменено</span>`);
+    if (vs.some((v) => adjFor(v.ex, key))) tags.push(`<span class="tag adj">корректировка агента</span>`);
+    const fl = state.flash === `${gi}:${ii}` ? " flash" : "";
+    return `<button class="prow${fl}" data-pi="${gi}:${ii}"><span class="code">${esc(code)}</span><span class="pr-main"><span class="pr-n">${esc(title)}</span>${lines}${notes.length ? `<span class="pr-note">${esc(notes[0])}</span>` : ""}${tags.length ? `<span class="tags">${tags.join("")}</span>` : ""}</span><span class="chev" aria-hidden="true">›</span></button>`;
+  }
+  function pgroupHTML(key, g, gi, L) {
+    const rows = g.items.map((it, ii) => prowHTML(key, it, gi, ii, `${L}${ii + 1}`)).join("");
+    return `<section class="pgroup">
+      <button class="pg-h" data-pg="${gi}" aria-label="Связка ${esc(L)}: отдых, режим времени, порядок"><span class="gl">${esc(L)}</span><span class="gt"><b>${esc(kindLabel(g))}</b>${g.rest ? ` · отдых&nbsp;${nb(g.rest)}` : ""}</span><span class="tier ${g.tier}">${TIER[g.tier]}</span><span class="pg-more" aria-hidden="true">⋯</span></button>
+      ${rows}</section>`;
+  }
+  const FIXED = { warmup: ["↑", "Разминка"], sprint: ["⚡", "Финиш: спринты"], n4x4: ["♥", "Мотор: интервалы"], z2: ["~", "Кардио: зона 2"], skill: ["✦", "Навык блока"] };
+  function pfixedHTML(g, pctx, sessKey) {
+    const [ic, name] = FIXED[g.kind] || ["•", g.kind];
+    const min = Math.round(groupMinutes(g, pctx, sessKey));
+    return `<div class="pfixed"><span class="gl soft" aria-hidden="true">${ic}</span><span class="gt">${name}${min ? ` · ${min} мин` : ""}</span><span class="tier ${g.tier}">${TIER[g.tier]}</span></div>`;
+  }
+  function reorderHTML(key, s, L) {
+    const si = PM.strengthIdx(s.groups), rows = [];
+    si.forEach((gi, pos) => {
+      const g = s.groups[gi];
+      rows.push(`<div class="ro-g" data-gi="${gi}"><span class="gl">${esc(L[gi])}</span><span class="gt">${esc(kindLabel(g))}</span>
+        <button class="ro-b" data-rog="${gi}:-1" aria-label="Связку ${esc(L[gi])} выше" ${pos === 0 ? "disabled" : ""}>↑</button><button class="ro-b" data-rog="${gi}:1" aria-label="Связку ${esc(L[gi])} ниже" ${pos === si.length - 1 ? "disabled" : ""}>↓</button></div>`);
+      g.items.forEach((it, ii) => {
+        const nm = PM.exIds(it).map(exName).join(" / ");
+        const top = pos === 0 && ii === 0, bottom = pos === si.length - 1 && ii === g.items.length - 1;
+        rows.push(`<div class="ro-i${state.flash === `${gi}:${ii}` ? " flash" : ""}" data-gi="${gi}" data-ii="${ii}"><span class="drag-h" title="Перетащить" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14M5 12h14M5 16h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span><span class="code">${esc(L[gi])}${ii + 1}</span><span class="ro-n">${esc(nm)}</span>
+          <button class="ro-b" data-roi="${gi}:${ii}:-1" aria-label="${esc(nm)} выше" ${top ? "disabled" : ""}>↑</button><button class="ro-b" data-roi="${gi}:${ii}:1" aria-label="${esc(nm)} ниже" ${bottom ? "disabled" : ""}>↓</button></div>`);
+      });
+    });
+    return `<div class="ro-head"><div><b>Порядок упражнений</b><div class="small muted">Перетащи за <span aria-hidden="true">≡</span> или нажимай стрелки. Через границу связки упражнение переходит в соседнюю.</div></div><button class="btn primary" data-preorder="0">Готово</button></div>
+      <div class="ro-list" id="roList" data-key="${key}">${rows.join("")}</div>`;
+  }
+  function planTrain(ctx) {
+    if (!state.pb) state.pb = ctx.block;
+    if (!state.pd) state.pd = ctx.day || "A";
+    const b = state.pb, d = state.pd, key = planKey(), s = sessOf(key);
+    const blockSeg = P.blocks.map((x) => `<button data-pb="${x.id}" class="${b === x.id ? "on" : ""}" aria-pressed="${b === x.id}">Блок ${x.id}${x.id === ctx.block ? `<i class="now" title="Сейчас идёт этот блок"></i>` : ""}<small>${esc(x.name)}</small></button>`).join("");
+    const daySeg = ["A", "B", "C"].map((x) => `<button data-pd="${x}" class="${d === x ? "on" : ""}" aria-pressed="${d === x}">${x}${PM.edited(`${b}${x}`) ? `<i class="ed" title="Есть твои правки"></i>` : ""}<small>${esc(sessOf(`${b}${x}`).title)}</small></button>`).join("");
+    const L = PM.letters(s.groups), pctx = planCtx(b, d, ctx);
+    const mins = [60, 90, 120].map((t) => estMinutes(s, Object.assign({}, pctx, { time: t }), key));
+    const nStr = PM.strengthIdx(s.groups).length;
+    const head = `<div class="pick">
+        <div class="seg pick-b" role="group" aria-label="Блок">${blockSeg}</div>
+        <div class="seg pick-d" role="group" aria-label="Тренировка">${daySeg}</div>
+      </div>
+      <div class="psess-h"><h2>${d} · ${esc(s.title)}</h2>
+        <div class="small muted">≈ ${mins[0]} · ${mins[1]} · ${mins[2]} мин в режимах 60 · 90 · 120${d === "C" ? " · по желанию" : ""}</div>
+        ${s.note ? `<p class="small muted psess-note">${esc(s.note)}</p>` : ""}</div>`;
+    if (state.reorder) return head + reorderHTML(key, s, L);
+    const list = s.groups.map((g, gi) => (isStrength(g) ? pgroupHTML(key, g, gi, L[gi]) : pfixedHTML(g, pctx, key))).join("");
+    const info = PM.forkInfo(key);
+    const edited = info ? `<div class="banner row"><span>Твоя версия: тренировка ${d}, блок ${b}.${info.ver && info.ver !== P.meta.version ? ` Программа с тех пор обновилась до v${esc(P.meta.version)}.` : ""}</span><span class="row-btns"><button class="btn" data-preset="${key}">Сбросить</button></span></div>` : "";
+    return `${head}
+      ${list}
+      <div class="plan-acts"><button class="btn primary" data-padd="1">＋ Добавить упражнение</button><button class="btn" data-preorder="1" ${nStr ? "" : "disabled"}>⇅ Порядок</button></div>
+      ${edited}
+      <p class="small muted">Нажми на упражнение — заменить, изменить подходы и повторы, переставить или убрать. «⋯» у связки — отдых, режим времени и порядок связок. Правки сразу видны на «Сегодня»; любую можно отменить.</p>`;
+  }
+  function planSched(ctx) {
+    return `${undoBanner()}
+      ${cycleCard(ctx)}
+      <section class="card">
+        <h3>Дни тренировок</h3>
+        <div class="week-grid" role="group" aria-label="Дни тренировок">${weekGrid()}</div>
+        <p class="small muted" id="wdayMsg" role="status">Нажми на день — сделать его тренировочным или выходным. До трёх дней: A, B и C идут по порядку недели.</p>
+        <p class="small muted">Пропустил день — следующая тренировка предложится в любой другой. A и B обязательны, C — по желанию.</p>
+      </section>`;
+  }
+  function planAbout(ctx) {
     if (!state.volBlock) state.volBlock = ctx.block;
-    const grid = weekGrid();
     const blocks = P.blocks.map((b) => `<div class="blk ${b.id === ctx.block ? "cur" : ""}">
-        <h3>Блок ${b.id} «${esc(b.name)}» <small>недели ${b.weeks}</small></h3>
+        <h3>Блок ${b.id} «${esc(b.name)}» <small>недели ${b.weeks}${b.id === ctx.block ? " · сейчас" : ""}</small></h3>
         <p>${esc(b.theme)}</p>
         <p class="small"><b>Навык:</b> ${esc(b.skill.title)} — ${esc(b.skill.goal)}.</p>
         <div class="small"><b>Цели:</b>${goalsHTML(b.id)}</div></div>`).join("");
     const blkBtns = P.blocks.map((b) => `<button data-volblock="${b.id}" class="${state.volBlock === b.id ? "on" : ""}">Блок ${b.id}</button>`).join("");
     return `
-      ${undoBanner()}
-      ${cycleCard(ctx)}
-      <section class="card">
-        <h3>Дни тренировок</h3>
-        <div class="week-grid" role="group" aria-label="Дни тренировок">${grid}</div>
-        <p class="small muted" id="wdayMsg" role="status">Нажми на день, чтобы сделать его тренировочным или выходным — до трёх дней: A, B и C по порядку. Пропустил день — следующая тренировка предложится в любой другой.</p>
-        <p class="small muted">A — низ, жим лёжа, трицепс. B — спина, задняя поверхность, бицепс. C — интервалы и памп, по желанию. Икры, дельты и руки — в обеих основных тренировках.</p>
-      </section>
-      <h2>Как это устроено</h2>
-      <section class="card">${rich(P.content.how)}</section>
       <h2>Три блока по 5 недель</h2>
       <div class="blocks">${blocks}</div>
       <p class="small muted">После 15-й недели — пересмотр по журналу или второй круг с заменами упражнений.</p>
       <h2>Куда идут подходы</h2>
       <section class="card">
         <div class="chart-ctl"><div class="seg" style="max-width:320px">${blkBtns}</div>
-          <label class="chk"><input type="checkbox" data-volsat="1" ${state.volSat ? "checked" : ""}> + суббота</label></div>
+          <label class="chk"><input type="checkbox" data-volsat="1" ${state.volSat ? "checked" : ""}> + тренировка C</label></div>
         ${volumeChart(state.volBlock, state.volSat)}
-        <p class="small muted" style="margin-top:8px">Рабочие подходы в неделю в режиме 90 минут. Косвенная работа (например, бицепс в подтягиваниях) считается за половину подхода — такой счёт точнее всего предсказывает рост ${rich("{pelland26}")}.</p>
+        <p class="small muted" style="margin-top:8px">Рабочие подходы в неделю в режиме 90 минут, с учётом твоих правок. Косвенная работа (например, бицепс в подтягиваниях) считается за половину подхода — такой счёт точнее всего предсказывает рост ${rich("{pelland26}")}.</p>
       </section>
-      <h2>Нюансы</h2>
-      <section class="card">${rich(P.content.progression)}</section>`;
+      <details class="card acc"><summary><h3>Как это устроено</h3></summary><div class="acc-b">${rich(P.content.how)}</div></details>
+      <details class="card acc"><summary><h3>Нюансы</h3></summary><div class="acc-b">${rich(P.content.progression)}</div></details>`;
   }
+
+  /* ---------- шторка: правка упражнений и связок ----------
+     Открывается снизу; изменения применяются сразу, а после закрытия их можно отменить одним касанием. */
+  const SH = { open: false, kind: null, o: null, stack: [], q: "", fromSel: null, snap: null, changed: false, msg: "", top: true };
+  const REPS_PRE = ["5–8", "6–8", "8–10", "8–12", "10–12", "10–15", "12–15", "12–20", "15–20"];
+  const SEC_PRE = ["20–30 с", "30–40 с", "30–45 с", "45–60 с"];
+  const RIR_PRE = ["0", "0–1", "1", "1–2", "2", "2–3", "3"];
+  const REST_PRE = ["30 с", "45 с", "60 с", "60–90 с", "90 с", "2 мин", "2–3 мин", "3 мин"];
+  function openSheet(kind, o, fromSel) {
+    const el = $("#sheet");
+    if (!SH.open) Object.assign(SH, { fromSel: fromSel || null, snap: PM.snapshot(), daySnap: S.get("daySw", null), changed: false, msg: "", stack: [] });
+    Object.assign(SH, { open: true, kind, o: Object.assign({}, o), q: "", top: true });
+    el.hidden = false;
+    document.body.classList.add("sheet-on");
+    renderSheet();
+    requestAnimationFrame(() => { el.classList.add("open"); const t = $("#sheetTitle"); if (t) t.focus({ preventScroll: true }); });
+  }
+  function sheetGo(kind, o) { SH.stack.push({ kind: SH.kind, o: SH.o }); Object.assign(SH, { kind, o: Object.assign({}, o), q: "", top: true }); renderSheet(); }
+  function sheetBack() { const p = SH.stack.pop(); if (!p) { closeSheet(); return; } Object.assign(SH, { kind: p.kind, o: p.o, q: "", top: true }); renderSheet(); }
+  /** msg === false — закрыть молча; иначе показать сообщение с отменой (по умолчанию — откат к состоянию на момент открытия). */
+  function closeSheet(msg, undo) {
+    if (!SH.open) return;
+    const el = $("#sheet"), snap = SH.snap, daySnap = SH.daySnap;
+    SH.open = false; el.classList.remove("open"); document.body.classList.remove("sheet-on");
+    setTimeout(() => { if (!SH.open) { el.hidden = true; $("#sheetBody").innerHTML = ""; } }, 240);
+    render();
+    if (msg !== false && (msg || SH.changed)) toast(msg || SH.msg || "Изменения сохранены", undo || (() => { PM.restore(snap); S.set("daySw", daySnap); render(); }));
+    const back = SH.fromSel && document.querySelector(SH.fromSel);
+    if (back) back.focus({ preventScroll: true });
+    state.flash = null;
+  }
+  function sheetChanged(msg) { SH.changed = true; if (msg) SH.msg = msg; SH.top = false; render(); renderSheet(); }
+  function renderSheet() {
+    const fn = { item: sheetItem, group: sheetGroup, replace: sheetReplace, swapwith: sheetSwapWith, add: sheetAdd, addplace: sheetAddPlace }[SH.kind];
+    const out = fn ? fn(SH.o) : null;
+    if (!out) { closeSheet(SH.changed ? undefined : false); return; }
+    $("#sheetTitle").textContent = out.title;
+    $("#sheetBack").hidden = !SH.stack.length;
+    const body = $("#sheetBody"), y = body.scrollTop;
+    body.innerHTML = out.html;
+    body.scrollTop = SH.top ? 0 : y;
+    SH.top = false;
+  }
+  function sheetItem(o) {
+    const s = sessOf(o.key), g = s.groups[o.gi], it = g && g.items && g.items[o.ii];
+    if (!it) return null;
+    const L = PM.letters(s.groups), code = `${L[o.gi]}${o.ii + 1}`;
+    const vs = PM.variants(it), v = vs.find((x) => x.key === o.v) || vs[0];
+    const ex = EX[v.ex] || { n: v.ex }, p = v.p, h = PM.exHolder(it, v.key), sec = ex.unit === "sec";
+    if (p.myo) o.myoSeen = true;
+    const others = g.items.filter((_, i) => i !== o.ii).map((x) => exName(PM.exIds(x)[0]));
+    const where = `Блок ${o.key[0]} · тренировка ${o.key[1]} · ${code}${others.length ? ` — ${kindLabel(g).toLowerCase()} с «${others.join("», «")}»` : ""}`;
+    const varSeg = vs.length > 1 ? `<div class="seg sh-var" role="tablist" aria-label="Вариант">${vs.map((x) => `<button data-sa="var" data-v="${x.key}" class="${x.key === v.key ? "on" : ""}" role="tab" aria-selected="${x.key === v.key}">${esc(x.label)}${it.weekAlt ? `<small>${esc(exName(x.ex))}</small>` : ""}</button>`).join("")}</div>` : "";
+    const adj = adjFor(v.ex, o.key);
+    const si = PM.strengthIdx(s.groups), first = si[0] === o.gi && o.ii === 0, last = si[si.length - 1] === o.gi && o.ii === g.items.length - 1;
+    const grp = (g.items.length > 1 ? [`<button class="chip" data-sa="togroup" data-v="new">Отдельно</button>`] : [])
+      .concat(si.map((x) => x === o.gi ? `<button class="chip on" aria-pressed="true" data-sa="noop">Связка ${esc(L[x])}</button>` : `<button class="chip" data-sa="togroup" data-v="${x}">В связку ${esc(L[x])}</button>`)).join("");
+    const html = `
+      <p class="sh-where">${esc(where)}</p>
+      ${musclesText(v.ex) ? `<p class="small muted sh-mus">${esc(musclesText(v.ex))}</p>` : ""}
+      ${varSeg}
+      <div class="sh-acts"><button class="btn primary" data-sa="replace">⇄ Заменить</button>${h.orig && EX[h.orig] ? `<button class="btn ghost" data-sa="revert">↩ Вернуть «${esc(exName(h.orig))}»</button>` : ""}</div>
+      ${adj ? `<div class="banner small">Действует корректировка агента «${esc(adj.title)}»${adj.sets != null ? `: подходов ${esc(adj.sets)}` : ""}${adj.reps ? `, повторы ${esc(adj.reps)}` : ""}${adj.replace_with ? `, замена на «${esc(exName(adj.replace_with))}»` : ""}. На тренировке она главнее этих настроек. <button class="lnk small" data-sa="settings">Корректировки</button></div>` : ""}
+      ${ex.src === "ds" ? `<div class="fld"><span class="fl">Считать</span><div class="seg sh-unit" role="radiogroup" aria-label="Как считать">${[["reps", "Повторы"], ["sec", "Секунды"]].map(([k, n]) => `<button role="radio" aria-checked="${(sec ? "sec" : "reps") === k}" data-sa="unit" data-v="${k}" class="${(sec ? "sec" : "reps") === k ? "on" : ""}">${n}</button>`).join("")}</div></div>` : ""}
+      <div class="fld"><span class="fl">${p.myo ? "Майо-подходы" : "Подходы"}</span>
+        <div class="stepper"><button data-sa="sets" data-v="-1" aria-label="Меньше подходов" ${p.sets <= 1 ? "disabled" : ""}>−</button><b aria-live="polite">${p.sets}</b><button data-sa="sets" data-v="1" aria-label="Больше подходов" ${p.sets >= 10 ? "disabled" : ""}>+</button></div></div>
+      ${p.myo ? `<p class="small muted">Майо-подход: 12–20 повторов до отказа, затем мини-подходы по 3–5 через 15 с.</p>` : `
+      <div class="fld col"><label class="fl" for="shReps">${sec ? "Время" : "Повторы"}</label>
+        <input id="shReps" class="inp" data-sf="reps" value="${esc(p.reps || "")}" maxlength="20" autocomplete="off" enterkeyhint="done">
+        <div class="chips pre">${(sec ? SEC_PRE : REPS_PRE).map((x) => `<button class="chip ${p.reps === x ? "on" : ""}" data-sa="reps" data-v="${x}">${x}</button>`).join("")}</div></div>
+      <div class="fld col"><span class="fl">Запас повторов (RIR)</span>
+        <div class="chips pre"><button class="chip ${p.rir == null || p.rir === "" ? "on" : ""}" data-sa="rir" data-v="">—</button>${RIR_PRE.map((x) => `<button class="chip ${String(p.rir) === x ? "on" : ""}" data-sa="rir" data-v="${x}">${x}</button>`).join("")}</div></div>`}
+      ${o.myoSeen ? `<label class="chk sh-myo"><input type="checkbox" data-sf="myo" ${p.myo ? "checked" : ""}> Майо-повторы</label>` : ""}
+      ${p.tempo != null ? `<div class="fld col"><label class="fl" for="shTempo">Темп</label><input id="shTempo" class="inp" data-sf="tempo" value="${esc(p.tempo)}" maxlength="40" autocomplete="off" enterkeyhint="done"></div>` : ""}
+      <div class="fld col"><label class="fl" for="shNote">Подсказка на тренировке</label><input id="shNote" class="inp" data-sf="note" value="${esc(p.note || "")}" maxlength="200" placeholder="Например: пауза 1 с внизу" autocomplete="off" enterkeyhint="done"></div>
+      <h3 class="sh-h">Место в тренировке</h3>
+      <div class="sh-grid">
+        <button class="btn" data-sa="move" data-v="-1" ${first ? "disabled" : ""}>↑ Выше</button>
+        <button class="btn" data-sa="move" data-v="1" ${last ? "disabled" : ""}>↓ Ниже</button>
+        <button class="btn" data-sa="swapwith">⇅ Поменять местами</button>
+      </div>
+      <div class="fl sh-gl">Связка</div>
+      <div class="chips wrap sh-groups" role="group" aria-label="Связка">${grp}</div>
+      <button class="btn danger wide" data-sa="remove">Убрать из тренировки</button>`;
+    return { title: it.weekAlt ? exName(v.ex) : ex.n, html };
+  }
+  function sheetGroup(o) {
+    const s = sessOf(o.key), g = s.groups[o.gi];
+    if (!isStrength(g)) return null;
+    const L = PM.letters(s.groups), si = PM.strengthIdx(s.groups), pos = si.indexOf(o.gi);
+    const names = g.items.map((it, ii) => `<li><span class="code">${esc(L[o.gi])}${ii + 1}</span>${esc(PM.exIds(it).map(exName).join(" / "))}</li>`).join("");
+    const tiers = [["core", "Всегда", "60 · 90 · 120"], ["std", "От 90 мин", "90 · 120"], ["max", "Только 120", "120 мин"]];
+    const html = `
+      <ul class="sh-list">${names}</ul>
+      <div class="fld col"><span class="fl">Когда делать</span>
+        <div class="seg sh-tier" role="radiogroup" aria-label="Когда делать">${tiers.map(([k, n, sub]) => `<button role="radio" aria-checked="${g.tier === k}" data-sa="tier" data-v="${k}" class="${g.tier === k ? "on" : ""}">${n}<small>${sub}</small></button>`).join("")}</div>
+        <p class="small muted">Режим времени выбираешь на «Сегодня»: в 60 минут остаётся только «всегда».</p></div>
+      <div class="fld col"><label class="fl" for="shRest">${g.items.length > 1 ? "Отдых после круга" : "Отдых между подходами"}</label>
+        <input id="shRest" class="inp" data-sf="rest" value="${esc(g.rest || "")}" maxlength="24" autocomplete="off" enterkeyhint="done">
+        <div class="chips pre">${REST_PRE.map((x) => `<button class="chip ${g.rest === x ? "on" : ""}" data-sa="rest" data-v="${x}">${x}</button>`).join("")}</div></div>
+      ${g.kind === "circuit" ? `<div class="fld"><span class="fl">Кругов</span><div class="stepper"><button data-sa="rounds" data-v="-1" aria-label="Меньше кругов">−</button><b>${g.rounds || 3}</b><button data-sa="rounds" data-v="1" aria-label="Больше кругов">+</button></div></div>` : ""}
+      <h3 class="sh-h">Порядок</h3>
+      <div class="sh-grid">
+        <button class="btn" data-sa="gmove" data-v="-1" ${pos <= 0 ? "disabled" : ""}>↑ Связку выше</button>
+        <button class="btn" data-sa="gmove" data-v="1" ${pos >= si.length - 1 ? "disabled" : ""}>↓ Связку ниже</button>
+        ${g.items.length > 1 ? `<button class="btn" data-sa="split">Разделить на отдельные упражнения</button>` : ""}
+      </div>
+      <button class="btn danger wide" data-sa="gremove">Убрать связку целиком</button>`;
+    return { title: `Связка ${L[o.gi]} · ${kindLabel(g)}`, html };
+  }
+  function sheetSwapWith(o) {
+    const s = sessOf(o.key), L = PM.letters(s.groups), cur = s.groups[o.gi] && s.groups[o.gi].items[o.ii];
+    if (!cur) return null;
+    const rows = [];
+    s.groups.forEach((g, gi) => {
+      if (!isStrength(g)) return;
+      g.items.forEach((it, ii) => {
+        const me = gi === o.gi && ii === o.ii;
+        rows.push(`<button class="pk ${me ? "me" : ""}" data-sa="swapto" data-v="${gi}:${ii}" ${me ? "disabled" : ""}><span class="code">${esc(L[gi])}${ii + 1}</span><span class="pk-n">${esc(PM.exIds(it).map(exName).join(" / "))}${me ? "<small>это упражнение</small>" : ""}</span></button>`);
+      });
+    });
+    return { title: "Поменять местами", html: `<p class="small muted">«${esc(exName(PM.exIds(cur)[0]))}» встанет на место выбранного, а выбранное — на его место. Связки и отдых остаются как были.</p><div class="pk-list">${rows.join("")}</div>` };
+  }
+  /* --- поиск упражнений для замены и добавления --- */
+  function similarIds(id) {
+    const e = EX[id]; if (!e) return [];
+    const prim = new Set((e.m && e.m.p) || []), out = (e.alts || []).slice();
+    Object.keys(EX).forEach((k) => { const x = EX[k]; if (k !== id && x.m && x.m.p.some((m) => prim.has(m)) && !out.includes(k)) out.push(k); });
+    return out.filter((k) => k !== id && EX[k] && EX[k].m);
+  }
+  function progSearch(q) {
+    const words = fold(q).split(/\s+/).filter(Boolean).map(stem);
+    if (!words.length) return [];
+    return Object.keys(EX).filter((id) => EX[id].m).map((id) => {
+      const e = EX[id], nm = fold(e.n), hay = `${nm} ${fold(musclesText(id))} ${e.ds ? fold(`${e.ds.n} ${e.ds.nr || ""}`) : ""}`;
+      if (!words.every((w) => hay.includes(w))) return null;
+      return [nm.startsWith(fold(q)) ? 0 : words.every((w) => nm.includes(w)) ? 1 : 2, id];
+    }).filter(Boolean).sort((a, b) => a[0] - b[0] || exName(a[1]).localeCompare(exName(b[1]), "ru")).map((x) => x[1]).slice(0, 8);
+  }
+  function pkRow(act, id, sub, label) {
+    return `<button class="pk" data-sa="${act}" data-v="${esc(id)}"><span class="pk-n">${esc(label || exName(id))}<small>${esc(sub || musclesText(id).split(" · ")[0])}</small></span></button>`;
+  }
+  function libResultsHTML(q, act, skip) {
+    if (!LIB.items) { loadLib(); return LIB.error ? `<p class="small muted">База упражнений не загрузилась (${esc(LIB.error)}).</p>` : `<p class="small muted">Загружаю базу упражнений…</p>`; }
+    const res = libFiltered(q, true).filter((x) => !skip.has(x.id)).slice(0, 30);
+    if (!res.length) return "";
+    return `<div class="pk-h">База упражнений</div>` + res.map((x) => `<button class="pk" data-sa="${act}" data-v="${esc(x.id)}"><span class="pk-n">${esc(libName(x))}<small>${esc(ru(MU_RU, x.t))} · ${esc(ru(EQ_RU, x.eq))}${PM.progOf(x.id) ? " · есть в программе" : ""}</small></span></button>`).join("");
+  }
+  function searchResultsHTML(q, actProg, actLib, exclude) {
+    const prog = progSearch(q).filter((id) => !exclude.includes(id));
+    const skip = new Set(prog.map((id) => EX[id].ds && EX[id].ds.id).filter(Boolean));
+    const out = (prog.length ? `<div class="pk-h">Из программы</div>` + prog.map((id) => pkRow(actProg, id)).join("") : "") + libResultsHTML(q, actLib, skip);
+    return out || `<p class="small muted">Ничего не нашлось. Попробуй короче или по-английски.</p>`;
+  }
+  /** Упражнение по программе в этом месте; для «Сегодня» — с учётом корректировок агента. */
+  function slotPlanned(o) {
+    const g = sessOf(o.key).groups[o.gi], it = g.items[o.ii];
+    return o.mode === "today" ? resolveItem(it, ctxNow(), `${o.key}-${g.id}-${o.ii}`).planned : PM.exHolder(it, o.v || "").ex;
+  }
+  function sheetReplace(o) {
+    const s = sessOf(o.key), g = s.groups[o.gi], it = g && g.items && g.items[o.ii];
+    if (!it) return null;
+    const h = PM.exHolder(it, o.v || ""), planned = slotPlanned(o), day = o.key[1];
+    const cur = o.mode === "today" ? daySwaps()[`${day}|${planned}`] || planned : planned;
+    if (!o.scope) o.scope = o.mode === "today" ? "today" : "here";
+    const n = PM.count(h.ex);
+    const opts = (o.mode === "today" ? [["today", "Сегодня"]] : []).concat([["here", o.mode === "today" ? `Блок ${o.key[0]} · ${day}` : "Только здесь"], ["all", `Везде · ${n}`]]);
+    const help = {
+      today: "Только эта тренировка — программа не меняется, завтра всё как было.",
+      here: `Насовсем в программе: блок ${o.key[0]}, тренировка ${day}.`,
+      all: `Насовсем во всех блоках и тренировках, где стоит «${exName(h.ex)}» — ${n} ${plural(n, "место", "места", "мест")}.`
+    };
+    const html = `
+      <div class="seg sh-scope" role="radiogroup" aria-label="Где заменить">${opts.map(([k, lab]) => `<button role="radio" aria-checked="${o.scope === k}" data-sa="scope" data-v="${k}" class="${o.scope === k ? "on" : ""}">${esc(lab)}</button>`).join("")}</div>
+      <p class="small muted sh-help">${esc(help[o.scope])}</p>
+      <input class="search" type="search" data-sq="replace" placeholder="Поиск: название или мышца" value="${esc(SH.q)}" autocomplete="off" enterkeyhint="search" aria-label="Поиск упражнения">
+      <div class="pk-list" id="pickList">${replaceListHTML(o, h, planned, cur)}</div>`;
+    return { title: `Заменить «${exName(cur)}»`, html };
+  }
+  function replaceListHTML(o, h, planned, cur) {
+    const q = SH.q.trim();
+    if (q) return searchResultsHTML(q, "pick", "pickds", [cur]);
+    const rows = [];
+    if (o.mode === "today" && cur !== planned) rows.push(pkRow("pick", planned, "как в программе", `↩ ${exName(planned)}`));
+    else if (h.orig && EX[h.orig] && o.scope !== "today") rows.push(pkRow("pick", h.orig, "исходное упражнение программы", `↩ ${exName(h.orig)}`));
+    const sim = similarIds(planned).filter((id) => id !== cur && id !== h.orig);
+    if (sim.length) rows.push(`<div class="pk-h">Похожие — та же мышца</div>` + sim.map((id) => pkRow("pick", id)).join(""));
+    rows.push(`<p class="small muted pk-foot">Нет подходящего? Начни вводить название — поищу и среди 1324 упражнений базы.</p>`);
+    return rows.join("");
+  }
+  function sheetAdd(o) {
+    const q = SH.q.trim();
+    let list;
+    if (q) list = searchResultsHTML(q, "addpick", "addpickds", []);
+    else {
+      const by = {};
+      Object.keys(EX).forEach((id) => { const e = EX[id]; if (e.m && e.m.p.length) (by[e.m.p[0]] = by[e.m.p[0]] || []).push(id); });
+      const helpers = (id) => { const e = EX[id]; return e.m.s.length ? "помогают: " + e.m.s.map((m) => (P.muscles[m] ? P.muscles[m].n.toLowerCase() : m)).join(", ") : " "; };
+      list = Object.keys(P.muscles).filter((m) => by[m]).map((m) => `<div class="pk-h">${esc(P.muscles[m].n)}</div>` + by[m].sort((a, b) => exName(a).localeCompare(exName(b), "ru")).map((id) => pkRow("addpick", id, helpers(id))).join("")).join("")
+        + `<p class="small muted pk-foot">Здесь упражнения программы. Начни вводить название — поищу и среди 1324 упражнений базы.</p>`;
+    }
+    return { title: "Добавить упражнение", html: `
+      <input class="search" type="search" data-sq="add" placeholder="Поиск: название или мышца" value="${esc(SH.q)}" autocomplete="off" enterkeyhint="search" aria-label="Поиск упражнения">
+      <div class="pk-list" id="pickList">${list}</div>` };
+  }
+  function sheetAddPlace(o) {
+    const def = o.ex ? EX[o.ex] : o.ds ? window.PlanModel.exerciseFromLib(o.ds) : null;
+    if (!def) return null;
+    const sec = def.unit === "sec";
+    if (o.sets == null) Object.assign(o, { sets: 3, reps: sec ? "30–40 с" : "10–12", rir: sec ? "" : "1–2" });
+    o.scope = o.scope || "here"; o.tier = o.tier || "core"; if (o.place == null) o.place = "new";
+    const key = `${o.b}${o.d}`, s = sessOf(key), L = PM.letters(s.groups), si = PM.strengthIdx(s.groups);
+    if (o.place !== "new" && !si.includes(+o.place)) o.place = "new";
+    const seg = (act, items, curV) => items.map(([v, lab, sub]) => `<button data-sa="${act}" data-v="${v}" class="${String(curV) === String(v) ? "on" : ""}" aria-pressed="${String(curV) === String(v)}">${esc(lab)}${sub ? `<small>${esc(sub)}</small>` : ""}</button>`).join("");
+    const places = o.scope === "all" ? "" : `<div class="fld col"><span class="fl">Куда</span><div class="chips wrap">${[`<button class="chip ${o.place === "new" ? "on" : ""}" data-sa="aplace" data-v="new">Отдельно, в конец</button>`].concat(si.map((gi) => `<button class="chip ${String(o.place) === String(gi) ? "on" : ""}" data-sa="aplace" data-v="${gi}">В связку ${esc(L[gi])}</button>`)).join("")}</div></div>`;
+    const tiers = o.place === "new" || o.scope === "all" ? `<div class="fld col"><span class="fl">Когда делать</span><div class="seg sh-tier">${seg("atier", [["core", "Всегда", "60 · 90 · 120"], ["std", "От 90 мин", "90 · 120"], ["max", "Только 120", "120 мин"]], o.tier)}</div></div>` : "";
+    const html = `
+      ${def.m && def.m.p.length ? `<p class="small muted sh-mus">${esc(def.m.p.map((m) => P.muscles[m] ? P.muscles[m].n.toLowerCase() : m).join(", "))}</p>` : ""}
+      <div class="fld col"><span class="fl">Тренировка</span><div class="seg">${seg("ad", ["A", "B", "C"].map((x) => [x, x, sessOf(`${o.b}${x}`).title]), o.d)}</div></div>
+      <div class="fld col"><span class="fl">Блок</span><div class="seg">${seg("ab", P.blocks.map((b) => [b.id, `Блок ${b.id}`, b.name]), o.scope === "all" ? "" : o.b)}<button data-sa="ascope" data-v="${o.scope === "all" ? "here" : "all"}" class="${o.scope === "all" ? "on" : ""}" aria-pressed="${o.scope === "all"}">Все<small>1 · 2 · 3</small></button></div></div>
+      ${places}${tiers}
+      <div class="fld"><span class="fl">Подходы</span><div class="stepper"><button data-sa="asets" data-v="-1" aria-label="Меньше подходов" ${o.sets <= 1 ? "disabled" : ""}>−</button><b>${o.sets}</b><button data-sa="asets" data-v="1" aria-label="Больше подходов" ${o.sets >= 10 ? "disabled" : ""}>+</button></div></div>
+      <div class="fld col"><label class="fl" for="shAReps">${sec ? "Время" : "Повторы"}</label><input id="shAReps" class="inp" data-af="reps" value="${esc(o.reps)}" maxlength="20" autocomplete="off" enterkeyhint="done">
+        <div class="chips pre">${(sec ? SEC_PRE : REPS_PRE).map((x) => `<button class="chip ${o.reps === x ? "on" : ""}" data-sa="areps" data-v="${x}">${x}</button>`).join("")}</div></div>
+      ${sec ? "" : `<div class="fld col"><span class="fl">Запас повторов (RIR)</span><div class="chips pre"><button class="chip ${!o.rir ? "on" : ""}" data-sa="arir" data-v="">—</button>${RIR_PRE.map((x) => `<button class="chip ${o.rir === x ? "on" : ""}" data-sa="arir" data-v="${x}">${x}</button>`).join("")}</div></div>`}
+      <button class="btn primary wide" data-sa="adddo">Добавить${o.scope === "all" ? " во все блоки" : ` в ${o.d}, блок ${o.b}`}</button>`;
+    return { title: `Добавить «${def.n}»`, html };
+  }
+  function updatePickList() {
+    const box = $("#pickList"); if (!box || !SH.open) return;
+    if (SH.kind === "replace") {
+      const s = sessOf(SH.o.key), it = s.groups[SH.o.gi].items[SH.o.ii], h = PM.exHolder(it, SH.o.v || ""), planned = slotPlanned(SH.o);
+      box.innerHTML = replaceListHTML(SH.o, h, planned, SH.o.mode === "today" ? daySwaps()[`${SH.o.key[1]}|${planned}`] || planned : planned);
+    } else if (SH.kind === "add") {
+      const tmp = document.createElement("div"); tmp.innerHTML = sheetAdd(SH.o).html;
+      box.innerHTML = tmp.querySelector("#pickList").innerHTML;
+    }
+  }
+  /** Выбор упражнения в шторке замены. */
+  function pickReplace(exId) {
+    const o = SH.o, planned = slotPlanned(o);
+    if (o.mode === "today" && (o.scope === "today" || exId === planned)) {
+      const prev = S.get("daySw", null);
+      setDaySwap(o.key[1], planned, exId);
+      const msg = exId === planned ? `Вернул «${exName(planned)}»` : `Сегодня «${exName(exId)}» вместо «${exName(planned)}»`;
+      closeSheet(msg, () => { S.set("daySw", prev); render(); });
+      return;
+    }
+    if (exId === planned) { if (SH.stack.length) sheetBack(); else closeSheet(); return; }
+    const n = PM.replace(o.key, o.gi, o.ii, o.v || "", exId, o.scope === "all");
+    if (o.mode === "today") setDaySwap(o.key[1], planned, null);
+    const msg = o.scope === "all" ? `«${exName(exId)}» вместо «${exName(planned)}» — ${n} ${plural(n, "место", "места", "мест")}` : `«${exName(exId)}» вместо «${exName(planned)}» в ${o.key[1]}, блок ${o.key[0]}`;
+    if (SH.stack.length) { SH.changed = true; SH.msg = msg; sheetBack(); render(); return; }
+    SH.changed = true;
+    closeSheet(msg);
+  }
+  function sheetAction(t) {
+    const a = t.dataset.sa, v = t.dataset.v, o = SH.o;
+    if (a === "close") { closeSheet(); return; }
+    if (a === "back") { sheetBack(); return; }
+    if (a === "noop") return;
+    if (a === "settings") { closeSheet(); go("settings"); const el = $("#adjust"); if (el) el.scrollIntoView({ block: "start" }); return; }
+    // поиск и выбор
+    if (a === "pick") { pickReplace(v); return; }
+    if (a === "pickds") { const x = LIB.items && LIB.items.find((i) => i.id === v); if (x) pickReplace(PM.exFromLib(x)); return; }
+    if (a === "scope") { o.scope = v; renderSheet(); return; }
+    if (a === "addpick") { sheetGo("addplace", { ex: v, b: o.b, d: o.d }); return; }
+    if (a === "addpickds") {
+      const x = LIB.items && LIB.items.find((i) => i.id === v); if (!x) return;
+      const pid = PM.progOf(x.id);
+      sheetGo("addplace", pid ? { ex: pid, b: o.b, d: o.d } : { ds: x, b: o.b, d: o.d });
+      return;
+    }
+    // добавление
+    if (SH.kind === "addplace") {
+      if (a === "ad") o.d = v;
+      else if (a === "ab") { o.b = +v; o.scope = "here"; }
+      else if (a === "ascope") o.scope = v;
+      else if (a === "aplace") o.place = v === "new" ? "new" : +v;
+      else if (a === "atier") o.tier = v;
+      else if (a === "asets") o.sets = Math.max(1, Math.min(10, o.sets + +v));
+      else if (a === "areps") o.reps = v;
+      else if (a === "arir") o.rir = v;
+      else if (a === "adddo") {
+        const exId = o.ex || PM.exFromLib(o.ds), sec = EX[exId].unit === "sec";
+        const params = { sets: o.sets, reps: o.reps || (sec ? "30–40 с" : "10–12"), rir: sec || !o.rir ? null : o.rir };
+        const keys = o.scope === "all" ? P.blocks.map((b) => `${b.id}${o.d}`) : [`${o.b}${o.d}`];
+        let pos = null;
+        keys.forEach((k) => { const r = PM.add(k, exId, params, k === `${o.b}${o.d}` && o.place !== "new" ? +o.place : "new", o.tier); if (k === `${o.b}${o.d}` || !pos) pos = r; });
+        if (state.tab === "plan") { state.ptab = "train"; state.pb = o.scope === "all" ? state.pb || o.b : o.b; state.pd = o.d; state.flash = pos ? `${pos.gi}:${pos.ii}` : null; }
+        SH.changed = true;
+        closeSheet(`Добавлено «${exName(exId)}»: ${o.scope === "all" ? `тренировка ${o.d} во всех блоках` : `${o.d}, блок ${o.b}`}`);
+        return;
+      }
+      SH.top = false; renderSheet(); return;
+    }
+    // пункт программы
+    if (SH.kind === "item" || SH.kind === "swapwith") {
+      const s = sessOf(o.key), it = s.groups[o.gi] && s.groups[o.gi].items[o.ii];
+      if (!it) { closeSheet(); return; }
+      const vs = PM.variants(it), vk = (vs.find((x) => x.key === o.v) || vs[0]).key, p = PM.paramHolder(it, vk);
+      if (a === "var") { o.v = v; SH.top = false; renderSheet(); return; }
+      if (a === "unit") {
+        const id = PM.exHolder(it, vk).ex; PM.setUnit(id, v);
+        if (v === "sec" && !/с$/.test(String(p.reps || ""))) PM.setParams(o.key, o.gi, o.ii, vk, { reps: "30–40 с", rir: null });
+        else if (v !== "sec" && /с$/.test(String(p.reps || ""))) PM.setParams(o.key, o.gi, o.ii, vk, { reps: "10–12", rir: "1–2" });
+        sheetChanged(); return;
+      }
+      if (a === "replace") { sheetGo("replace", { key: o.key, gi: o.gi, ii: o.ii, v: vk, mode: "plan" }); return; }
+      if (a === "revert") { PM.revert(o.key, o.gi, o.ii, vk); sheetChanged(); return; }
+      if (a === "sets") { PM.setParams(o.key, o.gi, o.ii, vk, { sets: (p.sets || 1) + +v }); sheetChanged(); return; }
+      if (a === "reps") { PM.setParams(o.key, o.gi, o.ii, vk, { reps: v }); sheetChanged(); return; }
+      if (a === "rir") { PM.setParams(o.key, o.gi, o.ii, vk, { rir: v }); sheetChanged(); return; }
+      if (a === "move") {
+        const pos = PM.move(o.key, o.gi, o.ii, +v);
+        if (pos) { Object.assign(o, pos); state.flash = `${pos.gi}:${pos.ii}`; sheetChanged(); }
+        return;
+      }
+      if (a === "togroup") {
+        const pos = PM.toGroup(o.key, o.gi, o.ii, v === "new" ? "new" : +v);
+        if (pos) { Object.assign(o, pos); state.flash = `${pos.gi}:${pos.ii}`; sheetChanged(); }
+        return;
+      }
+      if (a === "swapwith") { sheetGo("swapwith", { key: o.key, gi: o.gi, ii: o.ii }); return; }
+      if (a === "swapto") {
+        const [gi, ii] = v.split(":").map(Number), L = PM.letters(s.groups);
+        const msg = `Поменяли местами ${L[o.gi]}${o.ii + 1} и ${L[gi]}${ii + 1}`;
+        PM.swapWith(o.key, { gi: o.gi, ii: o.ii }, { gi, ii });
+        state.flash = `${gi}:${ii}`; SH.changed = true;
+        closeSheet(msg); return;
+      }
+      if (a === "remove") { const nm = exName(PM.exIds(it)[0]); PM.remove(o.key, o.gi, o.ii); SH.changed = true; closeSheet(`Убрано «${nm}»`); return; }
+    }
+    // связка
+    if (SH.kind === "group") {
+      if (a === "tier") { PM.setGroup(o.key, o.gi, { tier: v }); sheetChanged(); return; }
+      if (a === "rest") { PM.setGroup(o.key, o.gi, { rest: v }); sheetChanged(); return; }
+      if (a === "rounds") { const g = sessOf(o.key).groups[o.gi]; PM.setGroup(o.key, o.gi, { rounds: (g.rounds || 3) + +v }); sheetChanged(); return; }
+      if (a === "gmove") { const t2 = PM.moveGroup(o.key, o.gi, +v); if (t2 != null) { o.gi = t2; sheetChanged(); } return; }
+      if (a === "split") { PM.split(o.key, o.gi); SH.changed = true; closeSheet("Связка разделена"); return; }
+      if (a === "gremove") { PM.removeGroup(o.key, o.gi); SH.changed = true; closeSheet("Связка убрана"); return; }
+    }
+  }
+  function sheetField(t) {
+    const o = SH.o, f = t.dataset.sf, af = t.dataset.af;
+    const mark = () => { const box = t.closest(".fld"); if (box) box.querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c.dataset.v === t.value.trim())); };
+    if (af && SH.kind === "addplace") { o[af] = t.value.trim(); mark(); return; }
+    if (!f) return;
+    if (SH.kind === "group") { if (f === "rest") { PM.setGroup(o.key, o.gi, { rest: t.value }); SH.changed = true; render(); mark(); } return; }
+    if (SH.kind !== "item") return;
+    const it = sessOf(o.key).groups[o.gi].items[o.ii], vs = PM.variants(it), vk = (vs.find((x) => x.key === o.v) || vs[0]).key;
+    if (f === "myo") { PM.setParams(o.key, o.gi, o.ii, vk, { myo: t.checked }); sheetChanged(); return; }
+    PM.setParams(o.key, o.gi, o.ii, vk, { [f]: t.value });
+    SH.changed = true; render(); mark();
+  }
+  let sqTimer = null;
+  function mountOverlays() {
+    document.body.insertAdjacentHTML("beforeend", `
+      <div class="sheet" id="sheet" hidden>
+        <div class="sheet-bg" data-sa="close"></div>
+        <div class="sheet-p" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+          <div class="sheet-grab" aria-hidden="true"><i></i></div>
+          <div class="sheet-h"><button class="icon-btn sheet-back" id="sheetBack" data-sa="back" aria-label="Назад" hidden>‹</button><h2 class="sheet-t" id="sheetTitle" tabindex="-1"></h2><button class="icon-btn" data-sa="close" aria-label="Закрыть">✕</button></div>
+          <div class="sheet-b" id="sheetBody"></div>
+        </div>
+      </div>
+      <div class="toast" id="toast" role="status" aria-live="polite" hidden><span id="toastT"></span><button class="btn" data-toastundo="1" hidden>Отменить</button></div>`);
+    const sh = $("#sheet");
+    sh.addEventListener("click", (e) => { const t = e.target.closest("[data-sa]"); if (t && !t.disabled) sheetAction(t); });
+    sh.addEventListener("change", (e) => { if (e.target.matches("[data-sf],[data-af]")) sheetField(e.target); });
+    sh.addEventListener("input", (e) => {
+      const t = e.target;
+      if (t.dataset.sq) { clearTimeout(sqTimer); sqTimer = setTimeout(() => { SH.q = t.value; updatePickList(); }, 120); }
+      else if (t.dataset.af && SH.kind === "addplace") SH.o[t.dataset.af] = t.value.trim();
+    });
+    sh.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.matches(".inp")) { e.preventDefault(); e.target.blur(); } });
+    // смахнуть шторку вниз
+    let sw = null;
+    sh.addEventListener("pointerdown", (e) => {
+      if (!e.target.closest(".sheet-grab,.sheet-h") || e.target.closest("button")) return;
+      sw = { y: e.clientY, id: e.pointerId, dy: 0, p: sh.querySelector(".sheet-p") };
+      sw.p.style.transition = "none";
+      try { sh.setPointerCapture(e.pointerId); } catch (err) { /* ок */ }
+    });
+    sh.addEventListener("pointermove", (e) => { if (!sw || e.pointerId !== sw.id) return; sw.dy = Math.max(0, e.clientY - sw.y); sw.p.style.transform = `translateY(${sw.dy}px)`; });
+    const endSw = (e) => { if (!sw || e.pointerId !== sw.id) return; const { p, dy } = sw; sw = null; p.style.transition = ""; p.style.transform = ""; if (dy > 90) closeSheet(); };
+    sh.addEventListener("pointerup", endSw); sh.addEventListener("pointercancel", endSw);
+    $("#toast").addEventListener("click", (e) => { if (e.target.closest("[data-toastundo]") && toastUndo) { const u = toastUndo; hideToast(); u(); } });
+  }
+
+  /* ---------- сообщение с отменой ---------- */
+  let toastTimer = null, toastUndo = null;
+  function toast(msg, undo) {
+    const el = $("#toast"); if (!el) return;
+    $("#toastT").textContent = msg; toastUndo = undo || null;
+    el.querySelector("[data-toastundo]").hidden = !undo;
+    el.hidden = false; requestAnimationFrame(() => el.classList.add("on"));
+    clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, 7000);
+  }
+  function hideToast() {
+    const el = $("#toast"); if (!el) return;
+    el.classList.remove("on"); toastUndo = null; clearTimeout(toastTimer);
+    setTimeout(() => { if (!el.classList.contains("on")) el.hidden = true; }, 220);
+  }
+
+  /* ---------- перетаскивание в режиме «Порядок» ---------- */
+  let drag = null, scrollRAF = 0;
+  function dragTo(y) {
+    const { row, list } = drag;
+    let before = null;
+    for (const r of Array.from(list.children)) { if (r === row) continue; const b = r.getBoundingClientRect(); if (y < b.top + b.height / 2) { before = r; break; } }
+    if (before && before === list.firstElementChild) before = before.nextElementSibling; // выше первой связки нельзя
+    if (before === row) return;
+    if (before ? row.nextElementSibling !== before : list.lastElementChild !== row) { list.insertBefore(row, before); drag.moved = true; }
+  }
+  function autoScroll() {
+    cancelAnimationFrame(scrollRAF);
+    const step = () => {
+      if (!drag) return;
+      const y = drag.y, top = 110, bottom = window.innerHeight - 150;
+      const dy = y < top ? -Math.ceil((top - y) / 5) : y > bottom ? Math.ceil((y - bottom) / 5) : 0;
+      if (dy) { window.scrollBy(0, dy); dragTo(y); scrollRAF = requestAnimationFrame(step); }
+    };
+    scrollRAF = requestAnimationFrame(step);
+  }
+  function endDrag(e) {
+    if (!drag || (e && e.pointerId !== drag.id)) return;
+    const { row, list, moved } = drag;
+    drag = null; cancelAnimationFrame(scrollRAF);
+    row.classList.remove("dragging"); list.classList.remove("dragging");
+    if (!moved) return;
+    const layout = []; let cur = null;
+    Array.from(list.children).forEach((r) => {
+      if (r.classList.contains("ro-g")) { cur = { gi: +r.dataset.gi, items: [] }; layout.push(cur); }
+      else if (cur) cur.items.push([+r.dataset.gi, +r.dataset.ii]);
+    });
+    let flash = null;
+    layout.forEach((g) => g.items.forEach(([a, b], idx) => {
+      if (a === +row.dataset.gi && b === +row.dataset.ii) flash = `${g.gi - layout.filter((x) => x.gi < g.gi && !x.items.length).length}:${idx}`;
+    }));
+    PM.arrange(list.dataset.key, layout);
+    state.flash = flash;
+    render();
+    state.flash = null;
+  }
+  document.addEventListener("pointerdown", (e) => {
+    const h = e.target.closest(".drag-h"); if (!h) return;
+    const row = h.closest(".ro-i"), list = h.closest("#roList"); if (!row || !list) return;
+    e.preventDefault();
+    drag = { row, list, id: e.pointerId, y: e.clientY, moved: false };
+    row.classList.add("dragging"); list.classList.add("dragging");
+    try { list.setPointerCapture(e.pointerId); } catch (err) { /* без захвата тоже работает */ }
+  });
+  document.addEventListener("pointermove", (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    e.preventDefault();
+    drag.y = e.clientY; dragTo(drag.y); autoScroll();
+  }, { passive: false });
+  document.addEventListener("pointerup", endDrag);
+  document.addEventListener("pointercancel", endDrag);
 
   /* ---------- tab: library ---------- */
   const LIB = { items: null, loading: false, error: null, q: "", bp: "all", eq: "all", limit: 40 };
@@ -674,20 +1250,31 @@
           _h: fold(`${ru(BP_RU, x.bp)} ${ru(MU_RU, x.t)} ${ru(EQ_RU, x.eq)} ${x.sec.map((m) => ru(MU_RU, m)).join(" ")} ${(progByDs[x.id] || []).join(" ")}`),
         })).sort((a, b) => sortKey(a).localeCompare(sortKey(b), "ru"));
         LIB.loading = false; if (state.tab === "library") render();
+        updatePickList();
       })
-      .catch((e) => { LIB.loading = false; LIB.error = String(e.message || e); if (state.tab === "library") render(); });
+      .catch((e) => { LIB.loading = false; LIB.error = String(e.message || e); if (state.tab === "library") render(); updatePickList(); });
   }
   // Поиск по русскому и английскому названию, мышцам, оборудованию; «е» находит «ё».
   // Порядок: название начинается с запроса → запрос с начала слова → все слова в названии с начала слов →
   // все слова где-то в названии («жим» внутри «отжиманий») → английское название → остальное
   // (по доле слов в названии и совпадению целевой мышцы).
-  function libFiltered() {
-    const q = fold(LIB.q.trim()).replace(/\s+/g, " "), words = q ? q.split(" ").map(stem) : [];
+  /** ds-id упражнений, которые сейчас стоят в программе (с учётом правок). */
+  function usedDs() {
+    const out = new Set();
+    PM.usedIds().forEach((id) => { const e = EX[id]; if (e && e.ds) out.add(e.ds.id); });
+    return out;
+  }
+  function libFiltered(qArg, any) {
+    const raw = qArg != null ? qArg : LIB.q;
+    const q = fold(raw.trim()).replace(/\s+/g, " "), words = q ? q.split(" ").map(stem) : [];
+    const used = !any && LIB.bp === "prog" ? usedDs() : null;
     const out = [];
     LIB.items.forEach((x) => {
-      if (LIB.bp === "prog" && !progByDs[x.id]) return;
-      if (LIB.bp !== "all" && LIB.bp !== "prog" && x.bp !== LIB.bp) return;
-      if (LIB.eq !== "all" && x.eq !== LIB.eq) return;
+      if (!any) {
+        if (used && !used.has(x.id)) return;
+        if (LIB.bp !== "all" && LIB.bp !== "prog" && x.bp !== LIB.bp) return;
+        if (LIB.eq !== "all" && x.eq !== LIB.eq) return;
+      }
       if (!words.length) { out.push([0, x]); return; }
       const hay = `${x._r} ${x._n} ${x._h}`;
       if (!words.every((w) => hay.includes(w))) return;
@@ -700,20 +1287,22 @@
     return out.sort((a, b) => a[0] - b[0]).map((p) => p[1]);
   }
   function libRow(x) {
-    const inProg = progByDs[x.id];
+    const inProg = LIB.used && LIB.used.has(x.id), names = progByDs[x.id];
     return `<div class="lib-row" data-libid="${x.id}" role="button" tabindex="0" aria-expanded="false">
       <div class="lib-n">${esc(libName(x))}${inProg ? ` <span class="tag">в программе</span>` : ""}</div>
-      <div class="lib-m">${esc(ru(MU_RU, x.t))} · ${esc(ru(EQ_RU, x.eq))}${inProg ? ` · ${esc(inProg.join(", "))}` : ""}</div></div>`;
+      <div class="lib-m">${esc(ru(MU_RU, x.t))} · ${esc(ru(EQ_RU, x.eq))}${names ? ` · ${esc(names.join(", "))}` : ""}</div></div>`;
   }
   function libDetail(x) {
     return `<div class="lib-d">
       <div class="small muted">Зона: ${esc(ru(BP_RU, x.bp))} · цель: ${esc(ru(MU_RU, x.t))}${x.sec.length ? ` · помогают: ${esc(x.sec.map((m) => ru(MU_RU, m)).join(", "))}` : ""} · ${esc(ru(EQ_RU, x.eq))}</div>
       <ol>${x.s.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>
       ${x.r ? `<div class="small muted en">Оригинал: <span lang="en">${esc(x.n)}</span></div>` : ""}
+      <div class="lib-acts"><button class="btn" data-libadd="${esc(x.id)}">＋ Добавить в тренировку</button></div>
       ${mediaBlock(`${x.id}-${x.m}`, libName(x))}</div>`;
   }
   function libListHTML() {
     if (!LIB.items) return LIB.error ? `<div class="empty">Не получилось загрузить базу (${esc(LIB.error)}). При первом открытии нужна сеть.</div>` : `<div class="empty">Загружаю базу упражнений…</div>`;
+    LIB.used = usedDs();
     const f = libFiltered();
     const rows = f.slice(0, LIB.limit).map(libRow).join("");
     return `<div class="small muted" style="margin:4px 0 8px">Найдено: ${f.length}</div>${rows || `<div class="empty">Ничего не нашлось.</div>`}
@@ -1024,7 +1613,7 @@
 2. Если нужно, предложи корректировки программы на ближайшие 2–4 недели. Если менять нечего — так и скажи.
 3. Корректировки верни отдельным блоком кода JSON строго в формате upgrade.adjust.v1 (описание — в поле adjust_format). Я вставлю его в приложение: «Ещё → Настройки → Корректировки».
 
-Правила: используй только id упражнений из program.exercises (для замены — желательно из списка alts); не больше 6 изменений за раз; уважай ограничения из athlete.context_notes и отметки суставов; каждое изменение объясни в поле why одним-двумя предложениями. Разгрузку или повтор недели предлагай через поле cycle.`;
+Программа в выгрузке уже с моими правками (edited_by_user, replaced_from, added_by_user) — опирайся на неё. Правила: используй только id упражнений из program.exercises (для замены — желательно из списка alts); не больше 6 изменений за раз; уважай ограничения из athlete.context_notes и отметки суставов; каждое изменение объясни в поле why одним-двумя предложениями. Разгрузку или повтор недели предлагай через поле cycle.`;
   const ADJ_SPEC = {
     format: ADJ_FORMAT,
     fields: {
@@ -1050,20 +1639,20 @@
     const used = new Set();
     const sessions = {};
     Object.keys(P.sessions).forEach((key) => {
-      const s = P.sessions[key];
-      sessions[key] = { title: s.title, groups: s.groups.filter((g) => g.items && g.kind !== "warmup").map((g) => ({ id: g.id, kind: g.kind, tier: g.tier, rest: g.rest || null,
+      const s = sessOf(key);
+      sessions[key] = { title: s.title, edited_by_user: PM.edited(key), groups: s.groups.filter((g) => g.items && g.kind !== "warmup").map((g) => ({ id: g.id, kind: g.kind, tier: g.tier, rest: g.rest || null,
         items: g.items.filter((it) => it.ex || it.hl || it.weekAlt).map((it) => {
-          const one = (b) => { if (b.ex) used.add(b.ex); return { exercise: b.ex, sets: b.sets, reps: b.reps, rir: b.rir == null ? null : b.rir, note: b.note || null, myo: !!b.myo }; };
-          if (it.hl) return Object.assign(one({ ex: it.ex }), { heavy_week: one(Object.assign({ ex: it.ex }, it.hl.heavy)), light_week: one(Object.assign({ ex: it.ex }, it.hl.light)) });
+          const one = (b) => { if (b.ex) used.add(b.ex); return { exercise: b.ex, sets: b.sets, reps: b.reps, rir: b.rir == null ? null : b.rir, note: b.note || null, myo: !!b.myo, replaced_from: b.orig || undefined }; };
+          if (it.hl) return Object.assign(one({ ex: it.ex, orig: it.orig }), { heavy_week: one(Object.assign({ ex: it.ex }, it.hl.heavy)), light_week: one(Object.assign({ ex: it.ex }, it.hl.light)) });
           if (it.weekAlt) return { alternating_by_week: it.weekAlt.map(one) };
-          return one(it);
+          return Object.assign(one(it), it.add ? { added_by_user: true } : {});
         }) })) };
     });
     const exercises = {};
     Object.keys(EX).forEach((id) => {
       const e = EX[id];
       if (!e.m) return;
-      exercises[id] = { name: e.n, primary: e.m.p, secondary: e.m.s, alts: e.alts || [], tags: e.tags || [], in_program: used.has(id), unit: e.unit || "kg×reps" };
+      exercises[id] = { name: e.n, primary: e.m.p, secondary: e.m.s, alts: e.alts || [], tags: e.tags || [], in_program: used.has(id), unit: e.unit || "kg×reps", source: e.src === "ds" ? "добавлено пользователем из базы exercises-dataset" : undefined };
     });
     const log = Object.keys(state.logs).filter((k) => entryHasData(state.logs[k]) || (state.logs[k].s && (state.logs[k].s.note || state.logs[k].s.joints))).sort().map((k) => {
       const e = state.logs[k];
@@ -1125,7 +1714,7 @@
     if (!changes.length && !cycle) errors.push("Нет изменений: пустой список changes.");
     if (changes.length > 20) errors.push("Слишком много изменений за раз (больше 20).");
     const inProg = new Set();
-    Object.keys(P.sessions).forEach((key) => P.sessions[key].groups.forEach((g) => (g.items || []).forEach((it) => {
+    Object.keys(P.sessions).forEach((key) => sessOf(key).groups.forEach((g) => (g.items || []).forEach((it) => {
       const add = (b) => b && b.ex && inProg.add(`${key}|${b.ex}`);
       add(it); if (it.hl) add({ ex: it.ex }); if (it.weekAlt) it.weekAlt.forEach(add);
     })));
@@ -1217,7 +1806,7 @@
           <label>Вес для расчётов, кг<input inputmode="decimal" name="bw" value="${esc(state.settings.bw)}"></label>
           <label>ЧСС макс., уд/мин<input inputmode="numeric" name="hrmax" value="${esc(state.settings.hrmax)}"></label>
         </div>
-        <div class="ex-tools" style="margin-top:10px"><button class="btn primary" data-saveset="1">Сохранить</button><button class="btn" data-resetswaps="1">Сбросить замены</button></div>
+        <div class="ex-tools" style="margin-top:10px"><button class="btn primary" data-saveset="1">Сохранить</button><button class="btn" data-resetplan="1">Сбросить правки программы</button></div>
       </section>
       <section class="card">
         <h3>Анимации упражнений</h3>
@@ -1245,7 +1834,7 @@
       </section>
       <section class="card">
         <h3>Резервная копия</h3>
-        <p class="small">${SY && SY.signedIn() ? "Журнал, замеры, цикл, цели, замены и корректировки синхронизируются с базой. Резервная копия — полный JSON-файл." : "Без входа всё хранится только на этом устройстве. Резервная копия — полный JSON-файл."}</p>
+        <p class="small">${SY && SY.signedIn() ? "Журнал, замеры, цикл, цели, правки программы и корректировки синхронизируются с базой. Резервная копия — полный JSON-файл." : "Без входа всё хранится только на этом устройстве. Резервная копия — полный JSON-файл."}</p>
         <div class="ex-tools"><button class="btn" data-export="1">Экспорт JSON</button><label class="btn" style="cursor:pointer">Импорт JSON<input type="file" accept="application/json,.json" data-import="1" hidden></label></div>
       </section>`;
   }
@@ -1275,15 +1864,23 @@
     const fn = { today: renderToday, plan: renderPlan, library: renderLibrary, journal: renderJournal, more: renderMore, cardio: renderCardio, body: renderBody, food: renderFood, science: renderScience, settings: renderSettings }[state.tab] || renderToday;
     $("#app").innerHTML = fn();
     if (CH) CH.mount($("#app"));
+    const top = document.querySelector(".top"); if (top) document.documentElement.style.setProperty("--top-h", top.offsetHeight + "px");
     const fab = $("#fab");
     if (fab) fab.hidden = state.tab !== "today" && !T.id;
     if (state.tab !== "today" && !T.id) $("#tPanel").classList.remove("open");
   }
-  function go(tab) { state.tab = tab; S.set("tab", tab); render(); window.scrollTo(0, 0); }
+  function go(tab) { if (tab !== "plan") state.reorder = false; state.tab = tab; S.set("tab", tab); render(); window.scrollTo(0, 0); }
+  const parseSlot = (v) => { const [key, gi, ii] = String(v).split(":"); return [key, +gi, +ii]; };
+  function focusSel(a, b) {
+    const x = document.querySelector(a), y = b ? document.querySelector(b) : null;
+    const el = x && !x.disabled ? x : y && !y.disabled ? y : null;
+    if (el) el.focus({ preventScroll: true });
+  }
 
   /* ---------- events ---------- */
   let savedTimer = null;
   document.addEventListener("click", (e) => {
+    if (e.target.closest("#sheet,#toast")) return;
     const row = e.target.closest(".lib-row");
     if (row && !e.target.closest("button,a")) { toggleLib(row); return; }
     const t = e.target.closest("button,[data-tab],[data-jex]");
@@ -1299,7 +1896,55 @@
       if (pane) { pane.hidden = !pane.hidden; t.setAttribute("aria-expanded", String(!pane.hidden)); t.classList.toggle("on", !pane.hidden); }
       return;
     }
-    if (d.tab) { go(d.tab); if (d.cycfocus) { const c = $("#cycle"); if (c) c.scrollIntoView({ block: "start" }); } return; }
+    if (d.ptab) { state.ptab = d.ptab; state.reorder = false; render(); window.scrollTo(0, 0); return; }
+    if (d.pb) { state.pb = +d.pb; state.reorder = false; render(); return; }
+    if (d.pd) { state.pd = d.pd; state.reorder = false; render(); return; }
+    if (d.pi) { const [gi, ii] = d.pi.split(":").map(Number); openSheet("item", { key: planKey(), gi, ii, v: "" }, `[data-pi="${d.pi}"]`); return; }
+    if (d.pg !== undefined) { openSheet("group", { key: planKey(), gi: +d.pg }, `[data-pg="${d.pg}"]`); return; }
+    if (d.padd) { openSheet("add", { b: state.pb, d: state.pd }, "[data-padd]"); return; }
+    if (d.preorder !== undefined) {
+      if (d.preorder === "1") { state.reorder = true; state.reorderSnap = PM.snapshot(); render(); const h = $(".ro-head"); if (h) h.scrollIntoView({ block: "start" }); focusSel("[data-preorder='0']"); return; }
+      state.reorder = false; state.flash = null; render();
+      const snap = state.reorderSnap; state.reorderSnap = null;
+      if (snap && snap !== PM.snapshot()) toast("Порядок изменён", () => { PM.restore(snap); render(); });
+      focusSel("[data-preorder='1']");
+      return;
+    }
+    if (d.preset) {
+      const snap = PM.snapshot(); PM.reset(d.preset); render();
+      toast(`Тренировка ${d.preset[1]}, блок ${d.preset[0]} — снова как в программе`, () => { PM.restore(snap); render(); });
+      return;
+    }
+    if (d.roi) {
+      const [gi, ii, dir] = d.roi.split(":").map(Number), pos = PM.move(planKey(), gi, ii, dir);
+      if (pos) { state.flash = `${pos.gi}:${pos.ii}`; render(); focusSel(`[data-roi="${pos.gi}:${pos.ii}:${dir}"]`, `[data-roi="${pos.gi}:${pos.ii}:${-dir}"]`); }
+      return;
+    }
+    if (d.rog) {
+      const [gi, dir] = d.rog.split(":").map(Number), to = PM.moveGroup(planKey(), gi, dir);
+      if (to != null) { render(); focusSel(`[data-rog="${to}:${dir}"]`, `[data-rog="${to}:${-dir}"]`); }
+      return;
+    }
+    if (d.planedit) { state.ptab = "train"; state.pb = +d.planedit[0]; state.pd = d.planedit[1]; state.reorder = false; go("plan"); return; }
+    if (d.rep) {
+      const [key, gi, ii] = parseSlot(d.rep), it = sessOf(key).groups[gi].items[ii], ctx = ctxNow();
+      openSheet("replace", { key, gi, ii, v: it.weekAlt ? (ctx.heavy ? "0" : "1") : "", mode: "today" }, `[data-rep="${d.rep}"]`);
+      return;
+    }
+    if (d.repback) {
+      const [key, gi, ii] = parseSlot(d.repback), g = sessOf(key).groups[gi], ctx = ctxNow();
+      const r = resolveItem(g.items[ii], ctx, `${key}-${g.id}-${ii}`), prev = S.get("daySw", null);
+      setDaySwap(key[1], r.planned, null); render();
+      toast(`Вернул «${exName(r.planned)}»`, () => { S.set("daySw", prev); render(); });
+      return;
+    }
+    if (d.libadd) {
+      const x = LIB.items && LIB.items.find((i) => i.id === d.libadd); if (!x) return;
+      const ctx = ctxNow(), pid = PM.progOf(x.id), at = { b: ctx.block, d: ctx.day || "A" };
+      openSheet("addplace", pid ? Object.assign({ ex: pid }, at) : Object.assign({ ds: x }, at), `[data-libadd="${d.libadd}"]`);
+      return;
+    }
+    if (d.tab) { if (d.cycfocus) state.ptab = "sched"; go(d.tab); if (d.cycfocus) { const c = $("#cycle"); if (c) c.scrollIntoView({ block: "start" }); } return; }
     if (t.id === "back") { go("more"); return; }
     if (d.day) { state.day = d.day; render(); return; }
     if (d.time) { state.time = +d.time; S.set("time", state.time); touchToday({ time: state.time }); render(); return; }
@@ -1375,9 +2020,16 @@
       state.settings = Object.assign({}, state.settings, { start: get("start") || P.meta.startDefault, bw: +get("bw") || P.meta.profile.weight, hrmax: +get("hrmax") || 180 });
       S.set("settings", state.settings); state.day = suggestDay(); t.textContent = "Сохранено"; return;
     }
-    if (d.resetswaps) { state.swaps = {}; S.set("swaps", {}); t.textContent = "Замены сброшены"; return; }
+    if (d.resetplan) {
+      if (t.dataset.armed !== "1") { t.dataset.armed = "1"; t.textContent = "Точно сбросить все правки?"; setTimeout(() => { if (t.isConnected) { t.dataset.armed = ""; t.textContent = "Сбросить правки программы"; } }, 4000); return; }
+      const snap = PM.snapshot(), day = S.get("daySw", null);
+      PM.resetAll(); S.set("daySw", null); state.swaps = {}; S.set("swaps", {});
+      t.dataset.armed = ""; t.textContent = "Правки сброшены";
+      toast("Программа снова как в исходной версии", () => { PM.restore(snap); S.set("daySw", day); render(); });
+      return;
+    }
     if (d.export) {
-      const data = { app: "upgrade-v3", version: P.meta.version, exported: new Date().toISOString(), settings: state.settings, logs: state.logs, meas: state.meas, goals: state.goals, swaps: state.swaps, cycle: S.get("cycle", null), adjust: S.get("adjust", []) };
+      const data = { app: "upgrade-v3", version: P.meta.version, exported: new Date().toISOString(), settings: state.settings, logs: state.logs, meas: state.meas, goals: state.goals, swaps: state.swaps, cycle: S.get("cycle", null), adjust: S.get("adjust", []), plan: S.get("plan", null) };
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
       a.download = `upgrade-v3-${todayISO()}.json`; document.body.appendChild(a); a.click(); a.remove();
@@ -1386,6 +2038,18 @@
     if (t.id === "themeBtn") { state.theme = state.theme === "auto" ? "light" : state.theme === "light" ? "dark" : "auto"; S.set("theme", state.theme); applyTheme(); return; }
   });
   document.addEventListener("keydown", (e) => {
+    if (SH.open) {
+      if (e.key === "Escape") { e.preventDefault(); if (SH.stack.length) sheetBack(); else closeSheet(); return; }
+      if (e.key === "Tab") {
+        const f = Array.from($("#sheet").querySelectorAll("button:not([disabled]),input,select,textarea,[tabindex]:not([tabindex='-1'])")).filter((x) => x.offsetParent !== null);
+        if (f.length) {
+          const i = f.indexOf(document.activeElement);
+          if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+          else if (!e.shiftKey && (i === f.length - 1 || i === -1)) { e.preventDefault(); f[0].focus(); }
+        }
+      }
+      return;
+    }
     if ((e.key === "Enter" || e.key === " ") && e.target.classList && e.target.classList.contains("lib-row")) { e.preventDefault(); toggleLib(e.target); }
     if ((e.key === "Enter" || e.key === " ") && e.target.dataset && e.target.dataset.jex) { e.preventDefault(); e.target.click(); }
     if (e.key === "Enter" && e.target.dataset && e.target.dataset.enter) {
@@ -1401,7 +2065,6 @@
   }
   document.addEventListener("change", (e) => {
     const t = e.target, d = t.dataset;
-    if (d.swap !== undefined) { state.swaps[d.swap] = t.value; S.set("swaps", state.swaps); render(); return; }
     if (d.cycgo) { cycleAction("goto", t.value); return; }
     if (d.adjtoggle) { S.set("adjust", (S.get("adjust", []) || []).map((a) => a.id === d.adjtoggle ? Object.assign({}, a, { enabled: t.checked }) : a)); render(); return; }
     if (d.libeq) { LIB.eq = t.value; LIB.limit = 40; $("#libList").innerHTML = libListHTML(); return; }
@@ -1426,6 +2089,7 @@
           ["logs", "meas", "goals", "swaps", "settings"].forEach((k) => S.set(k, state[k]));
           if (j.cycle && typeof j.cycle.idx === "number") S.set("cycle", j.cycle);
           if (Array.isArray(j.adjust)) S.set("adjust", j.adjust);
+          if (j.plan && typeof j.plan === "object") { S.set("plan", j.plan); PM.reload(); }
           render();
         } catch (err) { alert("Не получилось прочитать файл: " + err.message); }
       };
@@ -1450,6 +2114,7 @@
     const s = document.querySelector(`[data-saved="${d.log}"]`);
     if (s) { s.classList.add("on"); clearTimeout(savedTimer); savedTimer = setTimeout(() => s.classList.remove("on"), 1200); }
   });
+  window.addEventListener("resize", () => { const top = document.querySelector(".top"); if (top) document.documentElement.style.setProperty("--top-h", top.offsetHeight + "px"); });
   window.addEventListener("online", () => softRender());
   window.addEventListener("offline", () => softRender());
 
@@ -1465,8 +2130,11 @@
   S.onRemote((keys) => {
     keys.forEach((k) => {
       if (k === "settings") state.settings = settingsFromStore();
+      else if (k === "plan" && PM) PM.reload();
       else if (SYNCED.includes(k)) state[k] = S.get(k, k === "meas" ? [] : {});
     });
+    if (keys.includes("swaps") && PM && Object.keys(state.swaps || {}).length) { PM.migrateSwaps(state.swaps); state.swaps = {}; S.set("swaps", {}); }
+    if (keys.includes("plan") && SH.open) renderSheet();
     if (keys.includes("settings") || keys.includes("logs") || keys.includes("cycle")) state.day = suggestDay();
     softRender();
   });
@@ -1554,6 +2222,9 @@
   /* ---------- boot ---------- */
   S.init().then(() => {
     loadState();
+    PM = window.PlanModel.create(P, { get: () => S.get("plan", null), set: (v) => S.set("plan", v) });
+    if (Object.keys(state.swaps || {}).length) { PM.migrateSwaps(state.swaps); state.swaps = {}; S.set("swaps", {}); }
+    mountOverlays();
     const qp = new URLSearchParams(location.search).get("tab");
     state.tab = qp && TITLES[qp] ? qp : S.get("tab", "today");
     if (!TITLES[state.tab]) state.tab = "today";
@@ -1565,5 +2236,5 @@
     initSW();
     if (SY) SY.start();
   });
-  window.__UPG = { state, ctxNow, weeklyVolume, resolveItem, estMinutes, groupVisible, suggestDay, LIB };
+  window.__UPG = { state, ctxNow, weeklyVolume, resolveItem, estMinutes, groupVisible, suggestDay, LIB, sessOf, get PM() { return PM; }, buildAnalysis };
 })();

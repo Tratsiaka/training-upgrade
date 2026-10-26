@@ -119,6 +119,7 @@
     goals: { kind: "whole" },
     cycle: { kind: "whole" },
     adjust: { kind: "whole" },
+    plan: { kind: "whole" },
     logs: { kind: "map", prefix: "log:" },
     meas: { kind: "list", prefix: "meas:", id: (m) => (m && m.date ? String(m.date) : "") }
   };
