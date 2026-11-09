@@ -7,3 +7,4 @@ backend/.env*
 backend/.neon
 .neon
 backend/deploy.env
+relay/.vercel/

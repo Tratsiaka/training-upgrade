@@ -1580,8 +1580,8 @@
     if (a === "syncnow") { await SY.syncNow(); loadDevices(); return; }
     if (a === "ping") {
       ACC.ping = "Проверяю связь…"; again();
-      try { const r = await SY.ping(); ACC.ping = r.ok ? `Сервер на связи, ответ за ${r.ms} мс.` : "Сервер ответил с ошибкой — попробуй позже."; }
-      catch (e) { ACC.ping = navigator.onLine === false ? "Нет интернета на устройстве." : "Сервер не отвечает — проверь интернет или VPN."; }
+      try { const r = await SY.ping(); ACC.ping = r.ok ? `Сервер на связи${r.relay ? " через прокси" : ""}, ответ за ${r.ms} мс.` : "Сервер ответил с ошибкой — попробуй позже."; }
+      catch (e) { ACC.ping = errText(e); }
       again(); return;
     }
     if (a === "signout") {

@@ -1,0 +1,6 @@
+{
+  "name": "upgrade-relay",
+  "private": true,
+  "type": "module",
+  "description": "Прокси к Neon Function для сетей, из которых Neon недоступен (Беларусь, Россия)"
+}

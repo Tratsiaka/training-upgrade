@@ -25,7 +25,44 @@
       try { if (v === undefined) localStorage.removeItem(SYS + k); else localStorage.setItem(SYS + k, JSON.stringify(v)); } catch (e) { /* нет места */ }
     }
   };
-  const apiBase = () => String(sys.get("apiOverride", "") || CFG.api || "").replace(/\/+$/, "");
+  /* ---------- адреса API ----------
+     Neon отвечает 403 на запросы из Беларуси и России, и браузер видит это как «нет связи».
+     Поэтому адресов два: сама функция (CFG.api) и прокси на Vercel (CFG.relay, см. relay/).
+     Первым пробуем тот, что сработал в прошлый раз; не вышло — следующий. */
+  function apiBases() {
+    const ov = sys.get("apiOverride", null);
+    const list = (Array.isArray(ov) ? ov : ov ? [ov] : [CFG.api, CFG.relay])
+      .filter(Boolean).map((u) => String(u).replace(/\/+$/, ""));
+    const out = list.filter((u, i) => list.indexOf(u) === i);
+    const i = out.indexOf(sys.get("via", ""));
+    if (i > 0) out.unshift(out.splice(i, 1)[0]);
+    return out;
+  }
+  const apiBase = () => apiBases()[0] || "";
+  /** fetch к API по первому адресу, который ответил. Без ответа — SyncError("network") с понятной причиной. */
+  async function send(path, init) {
+    const bases = apiBases();
+    if (!bases.length) throw new SyncError("noapi", "Сервер синхронизации не настроен");
+    for (let i = 0; i < bases.length; i++) {
+      try {
+        const res = await fetch(bases[i] + path, init);
+        if (sys.get("via", "") !== bases[i]) sys.set("via", bases[i]);
+        return res;
+      } catch (e) { /* сеть, блокировка или CORS — пробуем следующий адрес */ }
+    }
+    throw new SyncError("network", await whyNoAnswer(bases));
+  }
+  /** Сервер вообще доступен (ответ без CORS — значит, отказал), или сети нет? */
+  async function whyNoAnswer(bases) {
+    if (navigator.onLine === false) return "Нет интернета";
+    for (let i = 0; i < bases.length; i++) {
+      try {
+        await fetch(bases[i] + "/health", { mode: "no-cors", cache: "no-store" });
+        return "Сервер не пускает запросы из этой сети: из Беларуси и России — только через VPN";
+      } catch (e) { /* дальше */ }
+    }
+    return "Нет связи с сервером — проверь интернет";
+  }
 
   class SyncError extends Error {
     constructor(code, message, status, data) { super(message); this.code = code; this.status = status || 0; this.data = data; }
@@ -78,17 +115,10 @@
 
   async function authRequest(path, opts) {
     const o = opts || {};
-    const base = apiBase();
-    if (!base) throw new SyncError("noapi", "Сервер синхронизации не настроен");
     const headers = { "content-type": "application/json" };
     const jar = jarHeader();
     if (jar) headers["x-auth-cookies"] = jar;
-    let res;
-    try {
-      res = await fetch(base + "/auth/" + path, { method: o.method || "GET", headers: headers, body: o.body ? JSON.stringify(o.body) : undefined, cache: "no-store" });
-    } catch (e) {
-      throw new SyncError("network", "Нет связи с сервером");
-    }
+    const res = await send("/auth/" + path, { method: o.method || "GET", headers: headers, body: o.body ? JSON.stringify(o.body) : undefined, cache: "no-store" });
     jarUpdate(res.headers.get("x-auth-set-cookies"));
     keepJwt(res.headers.get("set-auth-jwt"));
     let data = null;
@@ -129,12 +159,7 @@
   async function api(path, opts) {
     const o = opts || {}, headers = { "content-type": "application/json" };
     if (o.auth) headers.authorization = o.auth;
-    let res;
-    try {
-      res = await fetch(apiBase() + path, { method: o.method || "GET", headers: headers, body: o.body ? JSON.stringify(o.body) : undefined, cache: "no-store" });
-    } catch (e) {
-      throw new SyncError("network", "Нет связи с сервером");
-    }
+    const res = await send(path, { method: o.method || "GET", headers: headers, body: o.body ? JSON.stringify(o.body) : undefined, cache: "no-store" });
     let data = null;
     try { data = await res.json(); } catch (e) { /* пусто */ }
     return { res: res, data: data };
@@ -267,12 +292,8 @@
   }
 
   /* ---------- обмен с сервером ---------- */
-  async function postSync(auth, body) {
-    try {
-      return await fetch(apiBase() + "/sync", { method: "POST", headers: { "content-type": "application/json", authorization: auth }, body: JSON.stringify(body), cache: "no-store" });
-    } catch (e) {
-      throw new SyncError("network", "Нет связи с сервером");
-    }
+  function postSync(auth, body) {
+    return send("/sync", { method: "POST", headers: { "content-type": "application/json", authorization: auth }, body: JSON.stringify(body), cache: "no-store" });
   }
   async function doSync() {
     if (!signedIn() || !apiBase()) return;
@@ -430,7 +451,8 @@
     async ping() {
       const t0 = Date.now();
       const r = await api("/health");
-      return { ok: r.res.ok && !!(r.data && r.data.ok), ms: Date.now() - t0 };
+      const relay = !!CFG.relay && apiBase() === String(CFG.relay).replace(/\/+$/, "");
+      return { ok: r.res.ok && !!(r.data && r.data.ok), ms: Date.now() - t0, relay: relay };
     },
     /** Наложить личные заметки на программу: [[путь], значение]. */
     applyOverlay(target, ov) {
