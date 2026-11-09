@@ -5,12 +5,16 @@
  *             cookie сессии ходят в заголовках X-Auth-Cookies / X-Auth-Set-Cookies и живут
  *             в localStorage приложения. Так вход работает и в установленной PWA на iPhone.
  *   /sync     синхронизация данных пользователя (last-write-wins по каждой записи).
+ *   /device   долгий вход устройства: после входа по коду устройство получает свой токен
+ *             (в базе только его хэш, срок продлевается при каждом использовании), чтобы не
+ *             зависеть от 7-дневной сессии Neon Auth. /devices — список, /device/revoke — выход.
  *   /me       кто я и есть ли доступ.
  *   /health   проверка, что функция жива (без обращения к базе).
  *
  * Доступ к данным — только по JWT Neon Auth (проверка по JWKS) и только для участников
  * из таблицы app.members (или почт из MEMBER_EMAILS — они добавляются туда автоматически).
  */
+import crypto from "node:crypto";
 import { attachDatabasePool } from "@neon/functions";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import { Pool, type PoolClient } from "pg";
@@ -28,6 +32,9 @@ const MAX_VALUE = 512 * 1024; // 512 КБ на одну запись
 const MAX_CHANGES = 1000;
 const PULL_LIMIT = 1000;
 const SERVER_PREFIX = "srv:"; // записи, которые пишет только сервер (личные заметки и т. п.)
+const DEVICE_DAYS = 180; // токен устройства живёт столько дней с последнего использования
+const MAX_DEVICES = 20;
+const sha256 = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
 attachDatabasePool(pool);
@@ -56,6 +63,19 @@ create table if not exists app.members (
   role     text not null default 'member',
   added_at timestamptz not null default now()
 );
+-- долгий вход устройства: в базе только хэш токена
+create table if not exists app.devices (
+  id           text primary key,
+  user_id      text        not null,
+  email        text,
+  token_hash   text        not null unique,
+  name         text,
+  created_at   timestamptz not null default now(),
+  last_used_at timestamptz not null default now(),
+  expires_at   timestamptz not null,
+  revoked_at   timestamptz
+);
+create index if not exists devices_user on app.devices (user_id);
 -- личные заметки к программе по почте владельца; при синхронизации копируются в app.kv как srv:overlay
 create table if not exists app.private_overlays (
   email      text primary key,
@@ -188,19 +208,36 @@ async function proxyAuth(request: Request, path: string, origin: string): Promis
 }
 
 /* ---------------- identity ---------------- */
-type Identity = { userId: string; email: string | null; payload: JWTPayload };
+type Identity = { userId: string; email: string | null; payload: JWTPayload; deviceId?: string };
 
+/** Authorization: Bearer <JWT Neon Auth> или Device <токен устройства>. */
 async function identify(request: Request): Promise<Identity | null> {
-  const h = request.headers.get("authorization") ?? "";
-  if (!jwks || !h.toLowerCase().startsWith("bearer ")) return null;
+  const m = /^(bearer|device)\s+(\S+)$/i.exec((request.headers.get("authorization") ?? "").trim());
+  if (!m) return null;
+  if (m[1].toLowerCase() === "device") return identifyDevice(m[2]);
+  if (!jwks) return null;
   try {
-    const { payload } = await jwtVerify(h.slice(7).trim(), jwks, { issuer });
+    const { payload } = await jwtVerify(m[2], jwks, { issuer });
     if (!payload.sub) return null;
     const email = typeof payload.email === "string" ? payload.email.toLowerCase() : null;
     return { userId: payload.sub, email, payload };
   } catch {
     return null;
   }
+}
+
+async function identifyDevice(token: string): Promise<Identity | null> {
+  if (!/^[A-Za-z0-9_-]{32,128}$/.test(token)) return null;
+  await ensureSchema();
+  const r = await pool.query(
+    `update app.devices set last_used_at = now(), expires_at = now() + make_interval(days => $2::int)
+       where token_hash = $1 and revoked_at is null and expires_at > now()
+       returning id, user_id, email`,
+    [sha256(token), DEVICE_DAYS],
+  );
+  if (!r.rowCount) return null;
+  const row = r.rows[0];
+  return { userId: row.user_id, email: row.email ?? null, payload: {}, deviceId: row.id };
 }
 
 const memberCache = new Map<string, { ok: boolean; email: string | null; at: number }>();
@@ -303,10 +340,77 @@ async function handleMe(origin: string, id: Identity): Promise<Response> {
   const db = await pool.connect();
   try {
     const m = await membership(db, id);
-    return json({ userId: id.userId, email: m.email, member: m.ok }, 200, origin);
+    return json({ userId: id.userId, email: m.email, member: m.ok, device: id.deviceId ?? null }, 200, origin);
   } finally {
     db.release();
   }
+}
+
+async function readJson(request: Request): Promise<Record<string, unknown> | null> {
+  const raw = await request.text();
+  if (raw.length > 8 * 1024) return null;
+  try {
+    const v = raw ? JSON.parse(raw) : {};
+    return v && typeof v === "object" && !Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Новое устройство — только сразу после входа по коду (JWT Neon Auth), не по токену другого устройства. */
+async function handleDeviceCreate(request: Request, origin: string, id: Identity): Promise<Response> {
+  if (id.deviceId) return fail(400, "need_session", "Подключить устройство можно только после входа по коду", origin);
+  const body = await readJson(request);
+  if (!body) return fail(400, "bad_json", "Некорректный JSON", origin);
+  const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) || null : null;
+  await ensureSchema();
+  const db = await pool.connect();
+  try {
+    const m = await membership(db, id);
+    if (!m.ok) return fail(403, "not_member", "У этого аккаунта пока нет доступа к синхронизации", origin);
+    const token = crypto.randomBytes(32).toString("base64url");
+    const devId = crypto.randomUUID();
+    await db.query(
+      `insert into app.devices (id, user_id, email, token_hash, name, expires_at)
+         values ($1, $2, $3, $4, $5, now() + make_interval(days => $6::int))`,
+      [devId, id.userId, m.email, sha256(token), name, DEVICE_DAYS],
+    );
+    await db.query(
+      `update app.devices set revoked_at = now()
+         where user_id = $1 and revoked_at is null
+           and id not in (select id from app.devices where user_id = $1 and revoked_at is null order by last_used_at desc limit $2::int)`,
+      [id.userId, MAX_DEVICES],
+    );
+    return json({ token, id: devId, days: DEVICE_DAYS }, 200, origin);
+  } finally {
+    db.release();
+  }
+}
+
+async function handleDevices(origin: string, id: Identity): Promise<Response> {
+  await ensureSchema();
+  const r = await pool.query(
+    `select id, name, created_at, last_used_at from app.devices
+       where user_id = $1 and revoked_at is null and expires_at > now() order by last_used_at desc`,
+    [id.userId],
+  );
+  return json({
+    devices: r.rows.map((x) => ({ id: x.id, name: x.name, created: x.created_at, last: x.last_used_at, current: x.id === id.deviceId })),
+  }, 200, origin);
+}
+
+/** Выйти на устройстве: по умолчанию на текущем, или по id — на любом своём. */
+async function handleDeviceRevoke(request: Request, origin: string, id: Identity): Promise<Response> {
+  const body = await readJson(request);
+  if (!body) return fail(400, "bad_json", "Некорректный JSON", origin);
+  const target = typeof body.id === "string" && body.id ? body.id : id.deviceId;
+  if (!target) return json({ revoked: 0 }, 200, origin);
+  await ensureSchema();
+  const r = await pool.query(
+    "update app.devices set revoked_at = now() where id = $1 and user_id = $2 and revoked_at is null",
+    [target, id.userId],
+  );
+  return json({ revoked: r.rowCount ?? 0 }, 200, origin);
 }
 
 /* ---------------- router ---------------- */
@@ -328,13 +432,22 @@ export default {
       return proxyAuth(request, sub, origin);
     }
 
-    if (path === "/sync" || path === "/me") {
+    if (path === "/sync" || path === "/me" || path === "/device" || path === "/devices" || path === "/device/revoke") {
       if (!origin) return fail(403, "origin", "Недопустимый источник запроса", null);
-      const id = await identify(request);
+      let id: Identity | null;
+      try {
+        id = await identify(request);
+      } catch (e) {
+        console.error("[auth]", e);
+        return fail(500, "internal", "Ошибка сервера", origin);
+      }
       if (!id) return fail(401, "unauthorized", "Нужен вход", origin);
       try {
         if (path === "/me" && request.method === "GET") return await handleMe(origin, id);
         if (path === "/sync" && request.method === "POST") return await handleSync(request, origin, id);
+        if (path === "/device" && request.method === "POST") return await handleDeviceCreate(request, origin, id);
+        if (path === "/devices" && request.method === "GET") return await handleDevices(origin, id);
+        if (path === "/device/revoke" && request.method === "POST") return await handleDeviceRevoke(request, origin, id);
         return fail(405, "method", "Метод не поддерживается", origin);
       } catch (e) {
         console.error("[api]", e);

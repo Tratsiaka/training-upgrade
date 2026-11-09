@@ -437,7 +437,7 @@
     const sessKey = `${ctx.block}${ctx.day}`;
     const sess = sessOf(sessKey);
     const wd = new Date().getDay();
-    const banners = [updateBanner(), installBanner(), undoBanner()];
+    const banners = [syncBanner(), updateBanner(), installBanner(), undoBanner()];
     const pd = plannedDays(), hasToday = ["A", "B", "C"].some((d) => entryHasData(state.logs[logKey(todayISO(), d)]));
     if (ctx.pre) banners.push(`<div class="banner accent">Старт — ${WD[parseISO(state.settings.start).getDay()]}, ${fmtDate(state.settings.start)}. Ниже первая неделя — можно начать и раньше.</div>`);
     else if (!pd.includes(wd) && !hasToday) banners.push(`<div class="banner">Сегодня ${WD[wd]} — по плану отдых: шаги и одна микродоза. Если всё же идёшь в зал — следующая по очереди тренировка уже выбрана.</div>`);
@@ -800,7 +800,7 @@
   }
   function sheetChanged(msg) { SH.changed = true; if (msg) SH.msg = msg; SH.top = false; render(); renderSheet(); }
   function renderSheet() {
-    const fn = { item: sheetItem, group: sheetGroup, replace: sheetReplace, swapwith: sheetSwapWith, add: sheetAdd, addplace: sheetAddPlace }[SH.kind];
+    const fn = { item: sheetItem, group: sheetGroup, replace: sheetReplace, swapwith: sheetSwapWith, add: sheetAdd, addplace: sheetAddPlace, account: sheetAccount }[SH.kind];
     const out = fn ? fn(SH.o) : null;
     if (!out) { closeSheet(SH.changed ? undefined : false); return; }
     $("#sheetTitle").textContent = out.title;
@@ -1028,6 +1028,7 @@
     if (a === "close") { closeSheet(); return; }
     if (a === "back") { sheetBack(); return; }
     if (a === "noop") return;
+    if (SH.kind === "account") { accountAction(a, t); return; }
     if (a === "settings") { closeSheet(); go("settings"); const el = $("#adjust"); if (el) el.scrollIntoView({ block: "start" }); return; }
     // поиск и выбор
     if (a === "pick") { pickReplace(v); return; }
@@ -1133,6 +1134,7 @@
           <div class="sheet-b" id="sheetBody"></div>
         </div>
       </div>
+      <div class="login" id="login" role="dialog" aria-modal="true" aria-labelledby="lgTitle" hidden></div>
       <div class="toast" id="toast" role="status" aria-live="polite" hidden><span id="toastT"></span><button class="btn" data-toastundo="1" hidden>Отменить</button></div>`);
     const sh = $("#sheet");
     sh.addEventListener("click", (e) => { const t = e.target.closest("[data-sa]"); if (t && !t.disabled) sheetAction(t); });
@@ -1154,6 +1156,19 @@
     sh.addEventListener("pointermove", (e) => { if (!sw || e.pointerId !== sw.id) return; sw.dy = Math.max(0, e.clientY - sw.y); sw.p.style.transform = `translateY(${sw.dy}px)`; });
     const endSw = (e) => { if (!sw || e.pointerId !== sw.id) return; const { p, dy } = sw; sw = null; p.style.transition = ""; p.style.transform = ""; if (dy > 90) closeSheet(); };
     sh.addEventListener("pointerup", endSw); sh.addEventListener("pointercancel", endSw);
+    const lg = $("#login");
+    lg.addEventListener("submit", (e) => { e.preventDefault(); loginSubmit(); });
+    lg.addEventListener("click", (e) => { const b = e.target.closest("[data-lg]"); if (b && !b.disabled) loginAction(b.dataset.lg); });
+    lg.addEventListener("input", (e) => {
+      const t = e.target;
+      if (t.id === "lgEmail") { LG.email = t.value; if (LG.err) loginMsg("", false); return; }
+      if (t.id !== "lgCode") return;
+      const v = t.value.replace(/\D/g, "").slice(0, 8);
+      if (v !== t.value) t.value = v;
+      LG.code = v;
+      if (LG.err) loginMsg("", false);
+      if (v.length === 6 && !LG.busy) loginSubmit(); // код Neon Auth — 6 цифр: входим без лишнего нажатия
+    });
     $("#toast").addEventListener("click", (e) => { if (e.target.closest("[data-toastundo]") && toastUndo) { const u = toastUndo; hideToast(); u(); } });
   }
 
@@ -1352,12 +1367,14 @@
     return fmtDate(isoOf(new Date(t)));
   }
   function syncText(st) {
+    if (SY && SY.configured() && !SY.signedIn()) return "Вход не выполнен — данные только на этом устройстве.";
     switch (st.state) {
       case "syncing": return "Синхронизация…";
       case "offline": return st.pending ? `Нет сети — изменений в очереди: ${st.pending}. Уйдут, когда появится связь.` : "Нет сети. Данные на устройстве в порядке.";
       case "denied": return "У этого аккаунта пока нет доступа к синхронизации.";
-      case "expired": return "Сессия истекла — войди заново. Данные на устройстве сохранены.";
-      case "error": return `Не получилось синхронизировать: ${st.error || "ошибка"}. Попробую ещё раз позже.`;
+      case "expired": return `Вход истёк — войди снова.${st.pending ? ` Изменений ждут отправки: ${st.pending}.` : ""} Данные на устройстве на месте.`;
+      case "error": return `Не получилось синхронизировать: ${st.error || "ошибка"}. Попробую ещё раз.`;
+      case "signedout": return "Вход не выполнен — данные только на этом устройстве.";
       default: return st.pending ? `Изменений в очереди: ${st.pending}` : `Синхронизировано ${agoText(st.last)}`;
     }
   }
@@ -1369,62 +1386,212 @@
     if (!SY || !SY.configured()) {
       return `<section class="card" id="acct"><h3>Аккаунт и синхронизация</h3><p class="small">Синхронизация пока не настроена — всё хранится на этом устройстве.</p></section>`;
     }
-    const st = SY.status(), user = SY.Auth.user(), pend = SY.Auth.pendingEmail();
-    if (user && st.state !== "expired") {
-      return `<section class="card" id="acct">
-        <h3>Аккаунт и синхронизация</h3>
-        <p class="small">Вход: <b>${esc(user.email)}</b></p>
-        <p class="small" id="syncStatus" role="status">${esc(syncText(st))}</p>
-        <div class="ex-tools"><button class="btn" data-sync="now">Синхронизировать</button><button class="btn ghost" data-auth="signout">Выйти</button></div>
-      </section>`;
-    }
-    if (pend) {
-      return `<section class="card" id="acct">
-        <h3>Вход</h3>
-        <p class="small">Код отправлен на <b>${esc(pend)}</b>. Письмо обычно приходит за минуту — загляни и в «Спам».</p>
-        <div class="form-grid one"><label>Код из письма<input name="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="8" data-enter="verify"></label></div>
-        <div class="ex-tools"><button class="btn primary" data-auth="verify">Войти</button><button class="btn" data-auth="resend">Новый код</button><button class="btn ghost" data-auth="cancel">Другая почта</button></div>
-        <p class="small muted" id="authMsg" role="status"></p>
-      </section>`;
-    }
-    const expired = user && st.state === "expired";
-    return `<section class="card" id="acct">
-      <h3>Аккаунт и синхронизация</h3>
-      <p class="small">${expired ? "Сессия истекла — войди заново. Данные на устройстве на месте и уйдут в базу после входа." : "Войди по коду из письма — журнал и замеры будут сохраняться в базе и появятся на всех твоих устройствах. Без входа приложение работает так же, но только на этом устройстве."}</p>
-      <div class="form-grid one"><label>Почта<input type="email" name="email" autocomplete="email" inputmode="email" placeholder="you@example.com" value="${esc(expired ? user.email : "")}" data-enter="send"></label></div>
-      <div class="ex-tools"><button class="btn primary" data-auth="send">Получить код</button></div>
-      <p class="small muted" id="authMsg" role="status"></p>
-    </section>`;
+    const user = SY.Auth.user(), st = SY.status();
+    if (!user) return `<section class="card" id="acct"><h3>Аккаунт и синхронизация</h3>
+      <p class="small">Вход не выполнен — журнал и программа хранятся только на этом устройстве. Войди по коду из письма: данные будут в облаке и на всех твоих устройствах.</p>
+      <div class="ex-tools"><button class="btn primary" data-login="1">Войти</button></div></section>`;
+    return `<section class="card" id="acct"><h3>Аккаунт и синхронизация</h3>
+      <p class="small">Вход: <b>${esc(user.email)}</b></p>
+      <p class="small" id="syncStatus" role="status">${esc(syncText(st))}</p>
+      <div class="ex-tools">${st.state === "expired" ? `<button class="btn primary" data-login="1">Войти снова</button>` : `<button class="btn" data-sync="now">Синхронизировать</button>`}<button class="btn" data-acc="1">Устройства и выход</button></div></section>`;
   }
-  let signoutArmed = 0;
-  async function authAction(kind, btn) {
-    const say = (s, err) => { const m = $("#authMsg"); if (m) { m.textContent = s; m.classList.toggle("err", !!err); } };
-    const box = $("#acct");
-    if (kind === "signout") {
-      if (Date.now() - signoutArmed > 4000) { signoutArmed = Date.now(); btn.textContent = "Точно выйти?"; return; }
-      signoutArmed = 0; btn.disabled = true; btn.textContent = "Выхожу…";
-      await SY.Auth.signOut();
-      return; // onOverlay(null) перезагрузит страницу
+
+  /* ---------- вход: экран при запуске, при истечении входа и по кнопке ---------- */
+  const LG = { open: false, step: "email", email: "", code: "", busy: false, msg: "", err: false, cool: 0, reason: "first", expAt: 0, timer: null };
+  const LOGO_SVG = '<svg width="38" height="38" viewBox="0 0 512 512" aria-hidden="true"><path d="M150 292 L256 186 L362 292" fill="none" stroke="currentColor" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/><path d="M170 370 H342" fill="none" stroke="currentColor" stroke-width="64" stroke-linecap="round" opacity=".55"/></svg>';
+  const needLogin = () => !!(SY && SY.configured() && !SY.signedIn() && !S.get("noLogin", false));
+  // Код ответа показываем только для неожиданных ошибок: по нему проще понять, что сломалось.
+  const errText = (e) => { const m = (e && e.message) || "Что-то пошло не так"; return e && e.status && ![400, 401, 429].includes(e.status) ? `${m} (код ${e.status})` : m; };
+  const coolLeft = () => Math.max(0, Math.ceil((LG.cool - Date.now()) / 1000));
+  function openLogin(reason) {
+    if (!SY || !SY.configured()) return;
+    if (SH.open) closeSheet(false);
+    const pend = SY.Auth.pendingEmail(), user = SY.Auth.user();
+    Object.assign(LG, { open: true, reason: reason || "manual", step: pend ? "code" : "email", email: pend || (user && user.email) || SY.Auth.lastEmail() || "", code: "", busy: false, msg: "", err: false });
+    renderLogin();
+    const el = $("#login");
+    el.hidden = false; document.body.classList.add("login-on");
+    requestAnimationFrame(() => {
+      el.classList.add("open");
+      const f = $(LG.step === "code" ? "#lgCode" : "#lgEmail");
+      if (f && (reason === "manual" || LG.step === "code")) f.focus(); else { const t = $("#lgTitle"); if (t) t.focus({ preventScroll: true }); }
+    });
+  }
+  function closeLogin() {
+    LG.open = false; clearInterval(LG.timer);
+    const el = $("#login"); if (!el) return;
+    el.classList.remove("open"); document.body.classList.remove("login-on");
+    setTimeout(() => { if (!LG.open) el.hidden = true; }, 220);
+    render();
+  }
+  function loginMsg(text, err) { LG.msg = text; LG.err = !!err; const m = $("#lgMsg"); if (m) { m.textContent = text; m.classList.toggle("err", !!err); } }
+  function renderLogin() {
+    const el = $("#login"); if (!el) return;
+    const expired = LG.reason === "expired", left = coolLeft();
+    const form = LG.step === "email"
+      ? `<label class="lg-l" for="lgEmail">Почта</label>
+        <input class="inp lg-inp" id="lgEmail" type="email" name="email" autocomplete="email" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="you@example.com" value="${esc(LG.email)}" enterkeyhint="send" ${LG.busy ? "disabled" : ""}>
+        <button class="btn primary lg-btn" type="submit" ${LG.busy ? "disabled" : ""}>${LG.busy ? "Отправляю…" : "Получить код"}</button>`
+      : `<p class="lg-sent">Код отправлен на <b>${esc(LG.email)}</b>. Письмо обычно приходит за минуту — загляни и в «Спам».</p>
+        <label class="lg-l" for="lgCode">Код из письма</label>
+        <input class="inp lg-inp lg-code" id="lgCode" name="otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="8" value="${esc(LG.code)}" enterkeyhint="done" ${LG.busy ? "disabled" : ""}>
+        <button class="btn primary lg-btn" type="submit" ${LG.busy ? "disabled" : ""}>${LG.busy ? "Вхожу…" : "Войти"}</button>
+        <div class="lg-row"><button class="lnk" type="button" data-lg="resend" ${left || LG.busy ? "disabled" : ""}>${left ? `Новый код через ${left} с` : "Прислать новый код"}</button><button class="lnk" type="button" data-lg="change">Другая почта</button></div>`;
+    el.innerHTML = `<div class="lg-in">
+      <div class="lg-logo">${LOGO_SVG}</div>
+      <h1 class="lg-t" id="lgTitle" tabindex="-1">${expired ? "Войди снова" : "Вход"}</h1>
+      <p class="lg-lead">${expired ? "Вход на этом устройстве истёк. Данные на месте — после входа все изменения уйдут в облако." : "Журнал, программа и твои правки хранятся в облаке и одинаковы на телефоне и компьютере. Пароль не нужен — пришлём код на почту."}</p>
+      <form class="lg-form" id="lgForm" novalidate>${form}</form>
+      <p class="lg-msg${LG.err ? " err" : ""}" id="lgMsg" role="status" aria-live="polite">${esc(LG.msg)}</p>
+      <div class="lg-foot"><button class="lnk" type="button" data-lg="skip">${LG.reason === "first" ? "Продолжить без входа" : "Позже"}</button>
+        <p class="small muted">${LG.reason === "first" ? "Без входа всё хранится только на этом устройстве." : "Пока не войдёшь, изменения копятся на этом устройстве."}</p></div>
+    </div>`;
+  }
+  function startCool() {
+    clearInterval(LG.timer);
+    LG.timer = setInterval(() => {
+      const b = document.querySelector('#login [data-lg="resend"]'); if (!b) { clearInterval(LG.timer); return; }
+      const left = coolLeft();
+      b.disabled = left > 0 || LG.busy;
+      b.textContent = left ? `Новый код через ${left} с` : "Прислать новый код";
+      if (!left) clearInterval(LG.timer);
+    }, 1000);
+  }
+  async function loginSubmit() {
+    if (LG.busy) return;
+    if (LG.step === "email") {
+      const v = (($("#lgEmail") || {}).value || "").trim().toLowerCase();
+      LG.email = v;
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { loginMsg("Проверь адрес почты", true); return; }
+      Object.assign(LG, { busy: true, msg: "Отправляю код…", err: false }); renderLogin();
+      try {
+        await SY.Auth.sendCode(v);
+        Object.assign(LG, { busy: false, step: "code", code: "", cool: Date.now() + 30000, msg: "", err: false });
+        renderLogin(); startCool();
+        const c = $("#lgCode"); if (c) c.focus();
+      } catch (e) { LG.busy = false; renderLogin(); loginMsg(errText(e), true); }
+      return;
     }
-    if (kind === "cancel") { SY.Auth.cancelCode(); render(); return; }
+    const code = (LG.code || (($("#lgCode") || {}).value || "")).replace(/\D/g, "");
+    if (code.length < 4) { loginMsg("Введи цифры из письма", true); return; }
+    Object.assign(LG, { busy: true, code, msg: "Проверяю код…", err: false }); renderLogin();
     try {
-      btn.disabled = true;
-      if (kind === "send" || kind === "resend") {
-        const email = kind === "resend" ? SY.Auth.pendingEmail() : box.querySelector('[name="email"]').value;
-        say("Отправляю код…");
-        await SY.Auth.sendCode(email);
-        render();
-        if (kind === "resend") say("Отправил новый код.");
-        const o = $('#acct [name="otp"]'); if (o) o.focus();
-      } else if (kind === "verify") {
-        say("Проверяю код…");
-        await SY.Auth.verifyCode(box.querySelector('[name="otp"]').value);
-        render();
-      }
+      await SY.Auth.verifyCode(code);
+      LG.busy = false; S.set("noLogin", false);
+      const st = SY.status();
+      closeLogin();
+      toast(st.state === "ok" ? "Вход выполнен — данные в облаке" : `Вход выполнен. ${syncText(st)}`);
     } catch (e) {
-      say(e.message || "Что-то пошло не так", true);
-    } finally {
-      if (btn.isConnected) btn.disabled = false;
+      LG.busy = false; renderLogin(); loginMsg(errText(e), true);
+      const c = $("#lgCode"); if (c) { c.focus(); c.select(); }
+    }
+  }
+  async function loginAction(a) {
+    if (a === "change") { SY.Auth.cancelCode(); Object.assign(LG, { step: "email", code: "", msg: "", err: false }); renderLogin(); const f = $("#lgEmail"); if (f) f.focus(); return; }
+    if (a === "resend") {
+      if (coolLeft() || LG.busy) return;
+      Object.assign(LG, { busy: true, msg: "Отправляю новый код…", err: false }); renderLogin();
+      try { await SY.Auth.sendCode(LG.email); Object.assign(LG, { busy: false, cool: Date.now() + 30000, msg: "Отправил новый код.", err: false }); renderLogin(); startCool(); }
+      catch (e) { LG.busy = false; renderLogin(); loginMsg(errText(e), true); }
+      return;
+    }
+    if (a === "skip") { if (LG.reason === "first") S.set("noLogin", true); closeLogin(); }
+  }
+
+  /* ---------- индикатор синхронизации в шапке и шторка аккаунта ---------- */
+  const CLOUD = '<path d="M7.5 18.5h9.6a4 4 0 0 0 .4-7.98A6 6 0 0 0 6.1 9.1a4.7 4.7 0 0 0 1.4 9.4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>';
+  const SYNC_IC = {
+    ok: CLOUD + '<path d="m9.7 14 1.8 1.8 3.3-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    syncing: CLOUD + '<g class="spin"><path d="M9.6 14.2a2.5 2.5 0 0 1 4.3-1.9M14.4 14.6a2.5 2.5 0 0 1-4.3 1.9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></g>',
+    pending: CLOUD + '<path d="M12 16.6v-4.4M10.2 13.9 12 12.1l1.8 1.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    off: CLOUD + '<path d="M4.5 4.5l15 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    warn: CLOUD + '<path d="M12 11.6v2.6M12 16.4v.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  };
+  function syncVisual() {
+    if (!SY || !SY.configured()) return null;
+    const st = SY.status();
+    if (!SY.signedIn()) return { ic: "off", cls: S.get("noLogin", false) ? "muted" : "warn", label: "Нет входа — данные только на этом устройстве. Войти" };
+    switch (st.state) {
+      case "syncing": return { ic: "syncing", cls: "", label: "Синхронизация…" };
+      case "offline": return { ic: st.pending ? "pending" : "off", cls: "muted", label: syncText(st) };
+      case "expired": return { ic: "warn", cls: "warn", label: "Вход истёк — войти снова" };
+      case "denied": case "error": return { ic: "warn", cls: "danger", label: syncText(st) };
+      default: return st.pending ? { ic: "pending", cls: "", label: syncText(st) } : { ic: "ok", cls: "ok", label: syncText(st) };
+    }
+  }
+  function updateSyncBtn() {
+    const b = $("#syncBtn"); if (!b) return;
+    const v = syncVisual();
+    if (!v) { b.hidden = true; return; }
+    b.hidden = false;
+    b.className = `icon-btn sync-ind ${v.cls}`;
+    b.setAttribute("aria-label", v.label); b.title = v.label;
+    b.innerHTML = `<svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true">${SYNC_IC[v.ic]}</svg>`;
+  }
+  const bannerKey = () => (!SY || !SY.configured() ? "" : !SY.signedIn() ? "off" : ({ expired: "exp", denied: "den" })[SY.status().state] || "");
+  function syncBanner() {
+    const k = bannerKey(), st = SY ? SY.status() : {};
+    if (k === "off") return `<div class="banner warn row"><span><b>Данные только на этом устройстве.</b> Войди — журнал и программа сохранятся в облаке.</span><span class="row-btns"><button class="btn primary" data-login="1">Войти</button></span></div>`;
+    if (k === "exp") return `<div class="banner warn row"><span><b>Вход истёк.</b> ${st.pending ? `Изменений ждут отправки: ${st.pending}.` : "Новые изменения не уходят в облако."}</span><span class="row-btns"><button class="btn primary" data-login="1">Войти</button></span></div>`;
+    if (k === "den") return `<div class="banner warn">У этого аккаунта пока нет доступа к синхронизации — данные хранятся на устройстве.</div>`;
+    return "";
+  }
+  function syncBtnClick() {
+    if (!SY || !SY.configured()) return;
+    if (!SY.signedIn() || SY.status().state === "expired") { openLogin("manual"); return; }
+    openAccount("#syncBtn");
+  }
+  const ACC = { devices: null, err: "", ping: "", armed: 0 };
+  function openAccount(fromSel) {
+    Object.assign(ACC, { devices: null, err: "", ping: "", armed: 0 });
+    openSheet("account", {}, fromSel);
+    loadDevices();
+  }
+  async function loadDevices() {
+    try { ACC.devices = await SY.Auth.devices(); ACC.err = ""; } catch (e) { ACC.err = errText(e); }
+    if (SH.open && SH.kind === "account") { SH.top = false; renderSheet(); }
+  }
+  function devicesHTML() {
+    if (ACC.err) return `<p class="small muted">Не получилось загрузить список: ${esc(ACC.err)}</p>`;
+    if (!ACC.devices) return `<p class="small muted">Загружаю…</p>`;
+    if (!ACC.devices.length) return `<p class="small muted">Пока нигде — устройство появится здесь после следующей синхронизации.</p>`;
+    return `<ul class="dev-list">${ACC.devices.map((d) => `<li><b>${esc(d.name || "Устройство")}</b>${d.current ? ` <span class="tag">это устройство</span>` : ""}<small>синхронизация ${esc(agoText(Date.parse(d.last)))} · вход ${esc(fmtDate(isoOf(new Date(d.created))))}</small></li>`).join("")}</ul>`;
+  }
+  function sheetAccount() {
+    if (!SY || !SY.signedIn()) return null;
+    const user = SY.Auth.user(), st = SY.status(), le = SY.lastError();
+    const bad = ["error", "denied", "expired"].includes(st.state);
+    const armed = ACC.armed && Date.now() - ACC.armed < 4000;
+    return { title: "Синхронизация", html: `
+      <p class="acc-user">Вход: <b>${esc(user.email)}</b></p>
+      <p class="acc-st${bad ? " err" : ""}" role="status">${esc(syncText(st))}</p>
+      ${le && bad ? `<p class="small muted">Ошибка: ${esc(le.msg)}${le.st ? ` (код ${le.st})` : ""}, ${esc(agoText(le.at))}.</p>` : ""}
+      <div class="sh-acts">${st.state === "expired" ? `<button class="btn primary" data-sa="relogin">Войти снова</button>` : `<button class="btn primary" data-sa="syncnow" ${st.state === "syncing" ? "disabled" : ""}>Синхронизировать сейчас</button>`}<button class="btn" data-sa="ping">Проверить связь</button></div>
+      ${ACC.ping ? `<p class="small muted">${esc(ACC.ping)}</p>` : ""}
+      <h3 class="sh-h">Где выполнен вход</h3>
+      ${devicesHTML()}
+      <p class="small muted">${SY.hasDevice() ? "Вход на этом устройстве держится полгода с последнего открытия приложения. " : ""}Синхронизация идёт при каждом открытии приложения, после изменений и раз в 5 минут.</p>
+      <button class="btn danger wide" data-sa="signout">${armed ? "Точно выйти на этом устройстве?" : "Выйти на этом устройстве"}</button>` };
+  }
+
+  async function accountAction(a, t) {
+    const again = () => { if (SH.open && SH.kind === "account") { SH.top = false; renderSheet(); } };
+    if (a === "relogin") { closeSheet(false); openLogin("manual"); return; }
+    if (a === "syncnow") { await SY.syncNow(); loadDevices(); return; }
+    if (a === "ping") {
+      ACC.ping = "Проверяю связь…"; again();
+      try { const r = await SY.ping(); ACC.ping = r.ok ? `Сервер на связи, ответ за ${r.ms} мс.` : "Сервер ответил с ошибкой — попробуй позже."; }
+      catch (e) { ACC.ping = navigator.onLine === false ? "Нет интернета на устройстве." : "Сервер не отвечает — проверь интернет или VPN."; }
+      again(); return;
+    }
+    if (a === "signout") {
+      if (!(ACC.armed && Date.now() - ACC.armed < 4000)) {
+        ACC.armed = Date.now(); again();
+        setTimeout(() => { if (ACC.armed && Date.now() - ACC.armed >= 4000) { ACC.armed = 0; again(); } }, 4100);
+        return;
+      }
+      ACC.armed = 0; t.disabled = true; t.textContent = "Выхожу…";
+      await SY.Auth.signOut(); // дальше страница перезагрузится с публичной программой
     }
   }
 
@@ -1856,7 +2023,8 @@
     $("#title").textContent = TITLES[state.tab] || "Апгрейд";
     $("#sub").textContent = `Блок ${ctx.block} «${blk.name}» · неделя ${ctx.week} из 5${ctx.cycle > 1 ? ` · круг ${ctx.cycle}` : ""}`;
     $("#back").hidden = !sub;
-    $("#offline").hidden = navigator.onLine !== false;
+    $("#offline").hidden = navigator.onLine !== false || !!(SY && SY.configured() && SY.signedIn());
+    updateSyncBtn();
     $("#nav").innerHTML = NAV.map(([id, n, ic]) => {
       const on = state.tab === id || (id === "more" && sub);
       return `<button class="nav-i ${on ? "on" : ""}" data-tab="${id}" aria-current="${on ? "page" : "false"}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">${ic}</svg><span>${n}</span></button>`;
@@ -1880,16 +2048,18 @@
   /* ---------- events ---------- */
   let savedTimer = null;
   document.addEventListener("click", (e) => {
-    if (e.target.closest("#sheet,#toast")) return;
+    if (e.target.closest("#sheet,#toast,#login")) return;
     const row = e.target.closest(".lib-row");
     if (row && !e.target.closest("button,a")) { toggleLib(row); return; }
     const t = e.target.closest("button,[data-tab],[data-jex]");
     if (!t) return;
     const d = t.dataset;
+    if (t.id === "syncBtn") { syncBtnClick(); return; }
+    if (d.login && SY) { openLogin("manual"); return; }
+    if (d.acc && SY) { openAccount("[data-acc]"); return; }
     if (d.jtab) { state.jtab = d.jtab; render(); return; }
     if (d.jvol !== undefined) { state.jvol = +d.jvol; render(); return; }
     if (d.jex) { state.jex = state.jex === d.jex ? null : d.jex; render(); const r = document.querySelector(`[data-jex="${d.jex}"]`); if (r && state.jex) r.focus({ preventScroll: true }); return; }
-    if (d.auth && SY) { authAction(d.auth, t); return; }
     if (d.sync === "now" && SY) { SY.syncNow(); return; }
     if (d.toggle) {
       const pane = t.closest(".ex").querySelector(`[data-pane="${d.toggle}"]`);
@@ -2038,25 +2208,26 @@
     if (t.id === "themeBtn") { state.theme = state.theme === "auto" ? "light" : state.theme === "light" ? "dark" : "auto"; S.set("theme", state.theme); applyTheme(); return; }
   });
   document.addEventListener("keydown", (e) => {
+    if (LG.open) {
+      if (e.key === "Escape" && !LG.busy) { e.preventDefault(); closeLogin(); return; }
+      if (e.key === "Tab") trapFocus(e, $("#login"));
+      return;
+    }
     if (SH.open) {
       if (e.key === "Escape") { e.preventDefault(); if (SH.stack.length) sheetBack(); else closeSheet(); return; }
-      if (e.key === "Tab") {
-        const f = Array.from($("#sheet").querySelectorAll("button:not([disabled]),input,select,textarea,[tabindex]:not([tabindex='-1'])")).filter((x) => x.offsetParent !== null);
-        if (f.length) {
-          const i = f.indexOf(document.activeElement);
-          if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
-          else if (!e.shiftKey && (i === f.length - 1 || i === -1)) { e.preventDefault(); f[0].focus(); }
-        }
-      }
+      if (e.key === "Tab") trapFocus(e, $("#sheet"));
       return;
     }
     if ((e.key === "Enter" || e.key === " ") && e.target.classList && e.target.classList.contains("lib-row")) { e.preventDefault(); toggleLib(e.target); }
     if ((e.key === "Enter" || e.key === " ") && e.target.dataset && e.target.dataset.jex) { e.preventDefault(); e.target.click(); }
-    if (e.key === "Enter" && e.target.dataset && e.target.dataset.enter) {
-      const b = document.querySelector(`#acct [data-auth="${e.target.dataset.enter}"]`);
-      if (b && !b.disabled) { e.preventDefault(); b.click(); }
-    }
   });
+  function trapFocus(e, box) {
+    const f = Array.from(box.querySelectorAll("button:not([disabled]),input:not([disabled]),select,textarea,[tabindex]:not([tabindex='-1'])")).filter((x) => x.offsetParent !== null);
+    if (!f.length) return;
+    const i = f.indexOf(document.activeElement);
+    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && (i === f.length - 1 || i === -1)) { e.preventDefault(); f[0].focus(); }
+  }
   function toggleLib(row) {
     const open = row.nextElementSibling && row.nextElementSibling.classList.contains("lib-d");
     if (open) { row.nextElementSibling.remove(); row.setAttribute("aria-expanded", "false"); return; }
@@ -2139,10 +2310,16 @@
     softRender();
   });
   if (SY) {
+    let lastBanner = bannerKey();
     SY.onStatus((st) => {
       const el = $("#syncStatus"); if (el) el.textContent = syncText(st);
       const f = $("#syncFoot"); if (f) f.textContent = footText();
-      if (st.state === "expired" && state.tab === "settings") softRender();
+      updateSyncBtn();
+      if (SH.open && SH.kind === "account") { SH.top = false; renderSheet(); }
+      const bk = bannerKey();
+      if (bk !== lastBanner) { lastBanner = bk; if (state.tab === "today" || state.tab === "settings") softRender(); }
+      // вход истёк — экран входа сам, но не чаще раза в 12 часов, если нажали «Позже»
+      if (st.state === "expired" && !LG.open && Date.now() - LG.expAt > 12 * 3600 * 1000) { LG.expAt = Date.now(); openLogin("expired"); }
     });
     SY.onOverlay((ov) => {
       if (!ov) { location.reload(); return; } // вышли из аккаунта — вернуть публичную программу
@@ -2235,6 +2412,7 @@
     render();
     initSW();
     if (SY) SY.start();
+    if (needLogin()) openLogin("first");
   });
   window.__UPG = { state, ctxNow, weeklyVolume, resolveItem, estMinutes, groupVisible, suggestDay, LIB, sessOf, get PM() { return PM; }, buildAnalysis };
 })();

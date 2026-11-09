@@ -2,6 +2,10 @@
    - Вход — код на email (Neon Auth). Cookie сессии живут здесь, в localStorage, и ходят
      в заголовках X-Auth-Cookies / X-Auth-Set-Cookies: сторонние cookie браузеру не нужны,
      поэтому вход держится и в установленной PWA на iPhone.
+   - Сразу после входа устройство получает свой токен (POST /device): синхронизация идёт по нему,
+     срок продлевается при каждом использовании — 7-дневная сессия Neon Auth больше не выкидывает.
+     Если токена нет или его отозвали — откат на сессию Neon Auth, а при её отсутствии — «войди снова».
+   - Синхронизация — при каждом открытии и возврате в приложение, после изменений и раз в 5 минут.
    - Данные: localStorage остаётся источником правды офлайн. Изменения копятся в очереди
      и уходят на сервер, когда есть сеть. Конфликты решает время изменения записи
      (last-write-wins); журнал и замеры синхронизируются по одной тренировке / дате. */
@@ -112,6 +116,57 @@
     throw new SyncError("signedout", "Сессия истекла — войди заново");
   }
 
+  /* ---------- устройство: долгий вход ---------- */
+  function deviceName() {
+    const ua = navigator.userAgent || "";
+    const os = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? "iPad"
+      : /Android/.test(ua) ? "Android" : /Mac OS X|Macintosh/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "Устройство";
+    const app = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+    const br = /Edg\//.test(ua) ? "Edge" : /CriOS|Chrome\//.test(ua) ? "Chrome" : /FxiOS|Firefox/.test(ua) ? "Firefox" : /Safari/.test(ua) ? "Safari" : "браузер";
+    return app ? `${os} · приложение` : `${os} · ${br}`;
+  }
+  /** Запрос к функции с заголовком авторизации; сетевую ошибку превращает в SyncError("network"). */
+  async function api(path, opts) {
+    const o = opts || {}, headers = { "content-type": "application/json" };
+    if (o.auth) headers.authorization = o.auth;
+    let res;
+    try {
+      res = await fetch(apiBase() + path, { method: o.method || "GET", headers: headers, body: o.body ? JSON.stringify(o.body) : undefined, cache: "no-store" });
+    } catch (e) {
+      throw new SyncError("network", "Нет связи с сервером");
+    }
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* пусто */ }
+    return { res: res, data: data };
+  }
+  async function ensureDevice() {
+    if (sys.get("dev", null)) return true;
+    const t = await getJwt(false);
+    const r = await api("/device", { method: "POST", auth: "Bearer " + t, body: { name: deviceName() } });
+    if (r.res.status === 403) throw new SyncError("denied", (r.data && r.data.message) || "Нет доступа", 403);
+    if (!r.res.ok || !r.data || !r.data.token) return false;
+    sys.set("dev", { t: r.data.token, id: r.data.id });
+    return true;
+  }
+  /** Сначала токен устройства, без него — JWT по сессии Neon Auth. */
+  async function authHeader() {
+    const dev = sys.get("dev", null);
+    if (dev) return { h: "Device " + dev.t, kind: "device" };
+    return { h: "Bearer " + (await getJwt(false)), kind: "jwt" };
+  }
+  /** GET/POST с откатом: отозванный токен устройства → сессия Neon Auth. */
+  async function authed(path, opts) {
+    let a = await authHeader();
+    let r = await api(path, Object.assign({}, opts, { auth: a.h }));
+    if (r.res.status === 401) {
+      if (a.kind === "device") { sys.set("dev", undefined); a = { h: "Bearer " + (await getJwt(false)), kind: "jwt" }; }
+      else a = { h: "Bearer " + (await getJwt(true)), kind: "jwt" };
+      r = await api(path, Object.assign({}, opts, { auth: a.h }));
+      if (r.res.status === 401) throw new SyncError("signedout", "Вход истёк — войди снова", 401);
+    }
+    return r;
+  }
+
   /* ---------- что синхронизируем ---------- */
   const SPEC = {
     settings: { kind: "whole" },
@@ -212,9 +267,9 @@
   }
 
   /* ---------- обмен с сервером ---------- */
-  async function postSync(token, body) {
+  async function postSync(auth, body) {
     try {
-      return await fetch(apiBase() + "/sync", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + token }, body: JSON.stringify(body), cache: "no-store" });
+      return await fetch(apiBase() + "/sync", { method: "POST", headers: { "content-type": "application/json", authorization: auth }, body: JSON.stringify(body), cache: "no-store" });
     } catch (e) {
       throw new SyncError("network", "Нет связи с сервером");
     }
@@ -224,7 +279,7 @@
     if (navigator.onLine === false) { setStatus("offline"); return; }
     flushDiff();
     setStatus("syncing");
-    let token = await getJwt(false);
+    let auth = await authHeader();
     for (let round = 0; round < 50; round++) {
       const known = sys.get("known", {}), pending = sys.get("pending", {}), cache = {};
       const keys = Object.keys(pending).slice(0, 300);
@@ -240,11 +295,15 @@
       });
       if (dropped) sys.set("pending", pending);
       const body = { since: sys.get("cursor", "0"), changes: changes };
-      let res = await postSync(token, body);
-      if (res.status === 401) { token = await getJwt(true); res = await postSync(token, body); }
+      let res = await postSync(auth.h, body);
+      if (res.status === 401) {
+        if (auth.kind === "device") { sys.set("dev", undefined); auth = { h: "Bearer " + (await getJwt(false)), kind: "jwt" }; }
+        else auth = { h: "Bearer " + (await getJwt(true)), kind: "jwt" };
+        res = await postSync(auth.h, body);
+      }
       let data = null;
       try { data = await res.json(); } catch (e) { /* пусто */ }
-      if (res.status === 401) throw new SyncError("signedout", "Сессия истекла — войди заново", 401);
+      if (res.status === 401) throw new SyncError("signedout", "Вход истёк — войди снова", 401);
       if (res.status === 403) throw new SyncError("denied", (data && data.message) || "Нет доступа", 403);
       if (!res.ok || !data) throw new SyncError("server", (data && data.message) || "Ошибка сервера " + res.status, res.status);
       const kn = sys.get("known", {}), pend = sys.get("pending", {});
@@ -255,6 +314,9 @@
       if (!data.more && !Object.keys(sys.get("pending", {})).length) break;
     }
     sys.set("lastSync", Date.now());
+    sys.set("lastErr", undefined);
+    // Вошли по сессии Neon Auth (старый вход или токен отозван) — заводим токен устройства на будущее.
+    if (auth.kind === "jwt") { try { await ensureDevice(); } catch (e) { /* попробуем при следующей синхронизации */ } }
     setStatus("ok");
   }
 
@@ -263,6 +325,7 @@
     if (running) return running;
     running = doSync().catch((e) => {
       const code = e instanceof SyncError ? e.code : "server";
+      sys.set("lastErr", { at: Date.now(), code: code, msg: String((e && e.message) || e), st: (e && e.status) || 0 });
       if (code === "signedout") { sys.set("jwt", undefined); setStatus("expired", { error: e.message }); }
       else if (code === "denied") setStatus("denied", { error: e.message });
       else if (code === "network") setStatus(navigator.onLine === false ? "offline" : "error", { error: e.message });
@@ -278,7 +341,7 @@
 
   /* ---------- статус ---------- */
   const listeners = [], overlayHandlers = [];
-  let status = { state: "idle" };
+  let status = { state: signedIn() ? "idle" : "signedout" };
   function setStatus(state, extra) {
     status = Object.assign({ state: state, pending: Object.keys(sys.get("pending", {})).length, last: sys.get("lastSync", 0) }, extra || {});
     listeners.forEach((fn) => { try { fn(status); } catch (e) { console.error(e); } });
@@ -307,30 +370,47 @@
       try { const s = await authRequest("get-session"); if (s && s.user) user = s.user; } catch (e) { /* хватит ответа входа */ }
       if (!user || !user.id) throw new SyncError("auth", "Не удалось войти — запроси код ещё раз");
       const prev = sys.get("user", null);
+      if (prev && prev.id !== user.id) ["dev", "cursor", "known", "pending", "overlay", "lastSync"].forEach((k) => sys.set(k, undefined));
       sys.set("user", { id: user.id, email: user.email || email, name: user.name || "" });
       sys.set("pendingEmail", undefined);
+      sys.set("lastEmail", user.email || email);
       if (!prev || prev.id !== user.id) bootstrap();
+      try { await ensureDevice(); } catch (e) { /* без токена устройства синхронизация пойдёт по сессии */ }
       setStatus("idle");
       return syncNow();
     },
     cancelCode() { sys.set("pendingEmail", undefined); emit(); },
+    lastEmail() { return sys.get("lastEmail", ""); },
+    /** Где выполнен вход: [{ id, name, created, last, current }]. */
+    async devices() {
+      const r = await authed("/devices");
+      if (!r.res.ok || !r.data) throw new SyncError("server", (r.data && r.data.message) || "Ошибка сервера " + r.res.status, r.res.status);
+      return r.data.devices || [];
+    },
+    async revokeDevice(id) {
+      const r = await authed("/device/revoke", { method: "POST", body: { id: id } });
+      return !!(r.data && r.data.revoked);
+    },
     async signOut() {
       try { if (navigator.onLine !== false) await syncNow(); } catch (e) { /* отправим, что успеем */ }
+      const dev = sys.get("dev", null);
+      if (dev) { try { await api("/device/revoke", { method: "POST", auth: "Device " + dev.t, body: {} }); } catch (e) { /* токен и так истечёт */ } }
       try { await authRequest("sign-out", { method: "POST", body: {} }); } catch (e) { /* сессия и так закроется */ }
-      ["jar", "jwt", "user", "overlay", "cursor", "known", "pending", "lastSync", "pendingEmail"].forEach((k) => sys.set(k, undefined));
-      setStatus("idle");
+      ["jar", "jwt", "user", "overlay", "cursor", "known", "pending", "lastSync", "pendingEmail", "dev", "lastErr"].forEach((k) => sys.set(k, undefined));
+      setStatus("signedout");
       overlayHandlers.forEach((fn) => { try { fn(null); } catch (e) { console.error(e); } });
     }
   };
 
-  /* ---------- триггеры ---------- */
-  window.addEventListener("online", () => scheduleSync(500));
+  /* ---------- триггеры: открыл приложение, вернулся в него, появилась сеть ---------- */
+  window.addEventListener("online", () => scheduleSync(300));
   window.addEventListener("offline", () => setStatus("offline"));
   document.addEventListener("visibilitychange", () => {
     if (!signedIn()) return;
     if (document.visibilityState === "hidden") { flushDiff(); if (Object.keys(sys.get("pending", {})).length) syncNow(); }
-    else if (Date.now() - sys.get("lastSync", 0) > 60000) scheduleSync(300);
+    else if (Date.now() - sys.get("lastSync", 0) > 15000) scheduleSync(100);
   });
+  window.addEventListener("pageshow", (e) => { if (e.persisted && signedIn()) scheduleSync(100); });
   setInterval(() => { if (document.visibilityState === "visible") scheduleSync(0); }, 5 * 60 * 1000);
 
   window.Sync = {
@@ -343,7 +423,15 @@
     onOverlay(fn) { overlayHandlers.push(fn); },
     overlay: () => sys.get("overlay", null),
     syncNow: syncNow,
-    start() { if (signedIn()) scheduleSync(600); },
+    start() { if (signedIn()) { setStatus("syncing"); scheduleSync(50); } else setStatus("signedout"); },
+    lastError: () => sys.get("lastErr", null),
+    hasDevice: () => !!sys.get("dev", null),
+    /** Проверка связи с сервером (без входа): { ok, ms } или исключение. */
+    async ping() {
+      const t0 = Date.now();
+      const r = await api("/health");
+      return { ok: r.res.ok && !!(r.data && r.data.ok), ms: Date.now() - t0 };
+    },
     /** Наложить личные заметки на программу: [[путь], значение]. */
     applyOverlay(target, ov) {
       ((ov && ov.set) || []).forEach((pair) => {

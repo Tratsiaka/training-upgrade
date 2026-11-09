@@ -406,7 +406,49 @@ body.sheet-on{overflow:hidden}
   background:var(--text);color:var(--bg);border-radius:14px;padding:8px 8px 8px 16px;font-size:14.5px;line-height:1.35;box-shadow:0 10px 30px rgba(0,0,0,.3);opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s}
 .toast.on{opacity:1;transform:none}
 .toast .btn{background:transparent;color:var(--bg);border-color:color-mix(in srgb,var(--bg) 45%,transparent);font-weight:700;flex:none;min-height:40px;padding:8px 12px}
-@media (prefers-reduced-motion: reduce){.sheet-p,.sheet-bg,.toast{transition:none}.flash{animation:none}}
+/* Индикатор синхронизации в шапке */
+.sync-ind.ok{color:var(--accent)}
+.sync-ind.muted{color:var(--faint)}
+.sync-ind.warn{color:var(--warn);background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 35%,transparent)}
+.sync-ind.danger{color:var(--danger);background:var(--danger-soft);border-color:color-mix(in srgb,var(--danger) 35%,transparent)}
+.sync-ind .spin{transform-box:fill-box;transform-origin:center;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Экран входа */
+.login{position:fixed;inset:0;z-index:80;background:var(--bg);overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  padding:calc(var(--safe-t) + 24px) 20px calc(var(--safe-b) + 24px);display:flex;opacity:0;transition:opacity .2s ease}
+.login.open{opacity:1}
+body.login-on{overflow:hidden}
+.lg-in{width:100%;max-width:400px;margin:auto;display:flex;flex-direction:column}
+.lg-logo{width:56px;height:56px;border-radius:16px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;margin-bottom:18px}
+.lg-t{font-size:28px;line-height:1.15;margin:0 0 8px;letter-spacing:-.02em;outline:none}
+.lg-lead{color:var(--muted);font-size:15.5px;line-height:1.45;margin:0 0 22px}
+.lg-form{display:grid;gap:8px}
+.lg-l{font-size:13px;font-weight:650;color:var(--muted)}
+.lg-inp{font-size:17px;padding:13px 14px;min-height:50px;border-radius:12px}
+.lg-code{font-size:26px;letter-spacing:.3em;text-align:center;font-variant-numeric:tabular-nums;font-weight:650;padding-left:calc(14px + .3em)}
+.lg-btn{min-height:50px;font-size:16px;border-radius:12px;margin-top:6px}
+.lg-sent{font-size:14.5px;line-height:1.45;margin:0 0 6px;background:var(--accent-soft);border-radius:10px;padding:10px 12px}
+.lg-row{display:flex;justify-content:space-between;gap:12px;margin-top:2px}
+.lg-row .lnk{padding:10px 0;min-height:44px}
+.lnk:disabled{color:var(--faint);cursor:default}
+.lg-msg{min-height:22px;margin:10px 0 0;font-size:14px;color:var(--muted)}
+.lg-msg.err{color:var(--danger)}
+.lg-msg:empty{visibility:hidden}
+.lg-foot{margin-top:24px;padding-top:14px;border-top:1px solid var(--border);text-align:center}
+.lg-foot .lnk{font-size:15px;padding:10px 6px;min-height:44px;text-align:center}
+.lg-foot p{margin:2px 0 0}
+
+/* Шторка аккаунта */
+.acc-user{margin:2px 0 4px;font-size:15px;overflow-wrap:anywhere}
+.acc-st{margin:0 0 4px;font-size:14.5px;color:var(--muted)}
+.acc-st.err{color:var(--danger)}
+.dev-list{list-style:none;margin:0 0 8px;padding:0}
+.dev-list li{padding:10px 0;border-top:1px solid var(--border);font-size:15px}
+.dev-list li:first-child{border-top:0}
+.dev-list small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+.dev-list .tag{margin-left:4px}
+@media (prefers-reduced-motion: reduce){.sheet-p,.sheet-bg,.toast,.login{transition:none}.flash,.sync-ind .spin{animation:none}}
 
 /* Library */
 .lib-tools{display:grid;gap:8px;margin:12px 0 6px}
@@ -451,7 +493,6 @@ ul.habits li span:first-child{font-weight:650}
 .form-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
 .form-grid label{display:grid;gap:3px;font-size:12.5px;color:var(--muted)}
 .form-grid.one{grid-template-columns:1fr!important;max-width:420px}
-#authMsg.err{color:var(--danger)}
 .form-grid input{border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:7px 9px;font-size:16px;width:100%;min-width:0}
 table.t{width:100%;border-collapse:collapse;font-size:13.5px}
 table.t th{font-weight:600;color:var(--muted);text-align:right;padding:6px 6px;border-bottom:1px solid var(--border);white-space:nowrap}
