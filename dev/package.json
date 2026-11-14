@@ -1,0 +1,13 @@
+{
+  "name": "upgrade-dev",
+  "private": true,
+  "type": "module",
+  "description": "Локальный стенд и тесты (см. dev/README.md)",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.11",
+    "@electric-sql/pglite-socket": "^0.2.14",
+    "@neondatabase/serverless": "^1.2.0",
+    "jose": "^6.2.13",
+    "pg": "^8.23.1"
+  }
+}

@@ -8,3 +8,11 @@ backend/.neon
 .neon
 backend/deploy.env
 relay/.vercel/
+
+# Claude Code и локальный стенд
+CLAUDE.local.md
+.claude/settings.local.json
+dev/node_modules/
+dev/shots/
+dev/.logs/
+__pycache__/
