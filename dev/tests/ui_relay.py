@@ -44,7 +44,8 @@ async def main():
         await pg.click('button[data-day="A"]')
         if not await pg.locator('input[data-log][data-f="w"]').first.is_visible():
             await pg.locator('button[data-toggle="log"]').first.click()
-        await pg.locator('input[data-log][data-f="w"]').first.fill("150"); await pg.wait_for_timeout(3500)
+        await pg.locator('input[data-log][data-f="w"]').first.fill("150")
+        await pg.locator('input[data-log][data-f="r"]').first.fill("10"); await pg.wait_for_timeout(3500)  # вес без повторов не записывается
         print("log reached DB via relay:", "150" in json.dumps(sql("select value from app.kv where key like 'log:%'")))
         hits0 = json.load(urllib.request.urlopen("http://localhost:8793/__hits"))["hits"]
         await pg.reload(); await pg.wait_for_timeout(1500)

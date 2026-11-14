@@ -9,6 +9,17 @@
   const isStrength = (g) => !!(g && STRENGTH[g.kind] && Array.isArray(g.items));
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const FINISH = { sprint: 1, z2: 1, skill: 1 };
+  /** Короткий отпечаток строки (djb2) — чтобы узнать, менялись ли связки после переименования. */
+  function hash(str) { let h = 5381; for (let i = 0; i < str.length; i++) h = ((h * 33) ^ str.charCodeAt(i)) >>> 0; return h.toString(36); }
+  /** "8-12" → "8–12": дефис и длинное тире между числами — в короткое тире, как в программе. */
+  const normDash = (v) => String(v).replace(/(\d)\s*[-—–]\s*(\d)/g, "$1–$2");
+  /** JSON с ключами по алфавиту — сравнение параметров без учёта порядка полей. */
+  function sig(o) {
+    if (Array.isArray(o)) return "[" + o.map(sig).join(",") + "]";
+    if (o && typeof o === "object") return "{" + Object.keys(o).sort().map((k) => JSON.stringify(k) + ":" + sig(o[k])).join(",") + "}";
+    return JSON.stringify(o === undefined ? null : o);
+  }
 
   // Мышцы базы → мышцы программы (для объёма и приоритетов).
   const MUSCLE = {
@@ -41,6 +52,7 @@
     const side = /\bone (arm|leg|hand)\b|single (arm|leg)|unilateral|\bone-arm\b/i.test(name);
     const def = { n: x.r || name, m: { p, s }, cues: [], alts: [], src: "ds",
       ds: { id: x.id, n: name, nr: x.r || "", s: x.s || [], m: `${x.id}-${x.m}` } };
+    if (x.eq) def.ds.eq = x.eq;
     if (timed) def.unit = "sec";
     if (side) def.side = true;
     return def;
@@ -81,17 +93,32 @@
       dsToProg = null;
     }
     inject();
-    const save = () => io.set(clone(data));
+    let rev = 0; // счётчик изменений плана: любая запись, откат или подгрузка с сервера
+    const save = () => { rev++; io.set(clone(data)); };
     const keys = () => Object.keys(P.sessions);
 
+    /** Только переименована: связки в записи — копия программы для старых версий (им нужен g),
+        а эта версия берёт связки из программы. Отпечаток не совпал — связки правили (например, старая версия): это обычная правка. */
+    const titleOnly = (f) => !!(f && f.to && f.to === hash(sig(f.g)));
     function sess(key) {
       const b = P.sessions[key], f = data.s[key];
       if (!b) return null;
-      return f ? Object.assign({}, b, { groups: f.g }) : b;
+      if (!f) return b;
+      const out = Object.assign({}, b, { groups: titleOnly(f) ? b.groups : f.g });
+      if (typeof f.t === "string" && f.t.trim()) out.title = f.t;
+      return out;
     }
-    const edited = (key) => !!data.s[key];
+    /** Название тренировки из программы (без переименования). */
+    const baseTitle = (key) => (P.sessions[key] ? P.sessions[key].title : "");
+    const edited = (key) => !!data.s[key] && !titleOnly(data.s[key]);
     function fork(key) {
-      if (!data.s[key]) data.s[key] = { g: clone(P.sessions[key].groups), at: new Date().toISOString(), ver: P.meta.version };
+      const f = data.s[key];
+      if (!f) data.s[key] = { g: clone(P.sessions[key].groups), at: new Date().toISOString(), ver: P.meta.version };
+      else if (f.to) {
+        // была только переименована: правим актуальную программу, название остаётся
+        if (titleOnly(f)) { f.g = clone(P.sessions[key].groups); f.ver = P.meta.version; }
+        delete f.to;
+      }
       return data.s[key].g;
     }
     function newGid(gs) { let i = 1; while (gs.some((g) => g.id === "U" + i)) i++; return "U" + i; }
@@ -108,7 +135,12 @@
       f.g.forEach((g) => { if (isStrength(g)) g.kind = kindFor(g); });
       f.at = new Date().toISOString();
     }
-    function finish(key) { normalize(key); save(); }
+    /** Переименованная тренировка снова совпала с программой — опять «только название» (не числится изменённой). */
+    function retitle(key) {
+      const f = data.s[key];
+      if (f && f.t && !f.to && P.sessions[key] && sig(f.g) === sig(P.sessions[key].groups)) f.to = hash(sig(f.g));
+    }
+    function finish(key) { normalize(key); retitle(key); save(); }
 
     /* ---- упражнения ---- */
     /** id упражнения программы, к которому привязана запись базы (или null). */
@@ -181,7 +213,7 @@
     function setParams(key, gi, ii, vkey, patch) {
       const it = fork(key)[gi].items[ii], p = paramHolder(it, vkey);
       if ("sets" in patch) p.sets = Math.max(1, Math.min(10, Math.round(+patch.sets) || 1));
-      if ("reps" in patch) { const v = String(patch.reps || "").trim().slice(0, 20); if (v) p.reps = v; }
+      if ("reps" in patch) { const v = normDash(String(patch.reps || "").trim()).slice(0, 20); if (v) p.reps = v; }
       if ("rir" in patch) { const v = patch.rir == null ? "" : String(patch.rir).trim().slice(0, 8); if (v) p.rir = v; else p.rir = null; }
       if ("note" in patch) { const v = String(patch.note || "").trim().slice(0, 200); if (v) p.note = v; else delete p.note; }
       if ("tempo" in patch) { const v = String(patch.tempo || "").trim().slice(0, 40); if (v) p.tempo = v; else delete p.tempo; }
@@ -255,11 +287,15 @@
       if (!P.exercises[exId]) return null;
       const gs = fork(key);
       const it = Object.assign({ ex: exId, sets: 3, reps: "10–12", rir: "1–2" }, params || {}, { add: 1 });
+      if (it.reps) it.reps = normDash(String(it.reps)).slice(0, 20);
       if (place !== "new" && isStrength(gs[place])) {
         gs[place].items.push(it);
         finish(key); return { gi: place, ii: gs[place].items.length - 1 };
       }
-      const si = strengthIdx(gs), at = si.length ? si[si.length - 1] + 1 : gs.length;
+      const si = strengthIdx(gs);
+      // Пустая тренировка: перед финишем (спринты, кардио, навык), после разминки.
+      let at = si.length ? si[si.length - 1] + 1 : gs.findIndex((g) => FINISH[g.kind]);
+      if (at < 0) at = gs.length;
       gs.splice(at, 0, { id: newGid(gs), kind: "single", tier: tier || "core", rest: "60–90 с", items: [it] });
       finish(key); return { gi: at, ii: 0 };
     }
@@ -289,11 +325,105 @@
     function removeGroup(key, gi) { fork(key).splice(gi, 1); finish(key); }
 
     /* ---- сброс, отмена, данные ---- */
+    /* ---- тренировка целиком ---- */
+    /** Пометки пункта (orig/add/chg) заново — относительно программы тренировки-получателя:
+        orig остаётся, только если исходное упражнение есть в этой тренировке программы (иначе «вернуть» некуда);
+        пункт, которого в программе нет, — add; есть, но с другими параметрами, — chg. */
+    function remark(groups, baseGroups) {
+      const baseItems = [], baseIds = new Set();
+      baseGroups.forEach((g) => { if (isStrength(g)) g.items.forEach((it) => { baseItems.push(it); exIds(it).forEach((id) => baseIds.add(id)); }); });
+      const holders = (it) => (it.weekAlt ? it.weekAlt : [it]);
+      const strip = (it) => {
+        const c = clone(it); delete c.add; delete c.chg; delete c.orig;
+        if (c.weekAlt) c.weekAlt.forEach((w) => { delete w.orig; });
+        return c;
+      };
+      groups.forEach((g) => {
+        if (!isStrength(g)) return;
+        g.items.forEach((it) => {
+          delete it.add; delete it.chg;
+          holders(it).forEach((h) => { if (h.orig && !baseIds.has(h.orig)) delete h.orig; });
+          const ident = holders(it).map((h) => h.orig || h.ex).join("/");
+          // каждый пункт программы сопоставляется один раз: второе такое же упражнение — уже «добавлено»
+          const bi = baseItems.findIndex((x) => exIds(x).join("/") === ident), b = bi >= 0 ? baseItems.splice(bi, 1)[0] : null;
+          if (!b) { it.add = 1; holders(it).forEach((h) => { delete h.orig; }); return; }
+          const mine = strip(it);
+          holders(mine).forEach((h, i) => { h.ex = holders(it)[i].orig || holders(it)[i].ex; });
+          if (sig(mine) !== sig(strip(b))) it.chg = 1;
+        });
+      });
+      return groups;
+    }
+    /** Куда вставлять силовую часть в связки gs без силовых: после открывающих блоков (разминка, интервалы), перед финишем. */
+    function strengthAt(gs) { const i = gs.findIndex((g) => FINISH[g.kind]); return i < 0 ? gs.length : i; }
+    /** Скопировать силовую часть тренировки (как она сейчас выглядит, с правками) в другие. У получателя силовые связки
+        заменяются целиком, а свои разминка, интервалы, кардио, финиш и навык остаются. Название переносится,
+        если отличается от названия получателя в программе. Возвращает число копий. */
+    function copy(fromKey, toKeys) {
+      const src = sess(fromKey); if (!src) return 0;
+      const strength = src.groups.filter(isStrength);
+      if (!strength.length) return 0;
+      let n = 0;
+      (toKeys || []).forEach((to) => {
+        if (to === fromKey || !P.sessions[to]) return;
+        const fixed = clone(sess(to).groups.filter((g) => !isStrength(g)));
+        const st = remark(clone(strength), P.sessions[to].groups);
+        const g = fixed.slice(); g.splice(strengthAt(fixed), 0, ...st);
+        // id связок уникальны внутри тренировки
+        const seen = new Set();
+        g.forEach((x) => { if (!x.id || seen.has(x.id)) { let i = 1; while (g.some((y) => y.id === "U" + i) || seen.has("U" + i)) i++; x.id = "U" + i; } seen.add(x.id); });
+        const entry = { g, at: new Date().toISOString(), ver: P.meta.version };
+        if (src.title && src.title !== baseTitle(to)) entry.t = src.title;
+        data.s[to] = entry;
+        normalize(to); n++;
+      });
+      if (n) save();
+      return n;
+    }
+    /** Очистить тренировку: убрать все силовые связки; разминка, кардио, финиш и навык остаются. Возвращает число убранных связок
+        (0 — силовых и так нет, ничего не меняется). */
+    function clear(key) {
+      const cur = sess(key);
+      if (!cur || !strengthIdx(cur.groups).length) return 0;
+      const gs = fork(key), n = strengthIdx(gs).length;
+      data.s[key].g = gs.filter((g) => !isStrength(g));
+      finish(key);
+      return n;
+    }
+    /** Своё название тренировки; пустое (или как в программе) — вернуть исходное.
+        Если связки не правились, запись помечается «только название» (to — отпечаток связок): тренировка не считается изменённой. */
+    function setTitle(key, title) {
+      if (!P.sessions[key]) return;
+      const v = String(title || "").replace(/\s+/g, " ").trim().slice(0, 60);
+      let f = data.s[key];
+      if (v && v !== baseTitle(key)) {
+        if (!f) { f = data.s[key] = { g: clone(P.sessions[key].groups), at: new Date().toISOString(), ver: P.meta.version }; f.to = hash(sig(f.g)); }
+        f.t = v; save(); return;
+      }
+      if (!f) return;
+      if (titleOnly(f)) { delete data.s[key]; save(); return; }
+      delete f.t; delete f.to;
+      // Кроме названия ничего не менялось — убираем правку совсем, чтобы тренировка не числилась изменённой.
+      if (sig(f.g) === sig(P.sessions[key].groups)) delete data.s[key];
+      save();
+    }
+    /** Вернуть один пункт к сохранённому виду (отмена правок быстрого редактора — только этого пункта). */
+    function putItem(key, gi, ii, saved) {
+      const g = sess(key).groups[gi];
+      if (!g || !g.items || !g.items[ii] || !saved) return false;
+      const gs = fork(key);
+      gs[gi].items[ii] = clone(saved);
+      const f = data.s[key];
+      if (!f.t && sig(f.g) === sig(P.sessions[key].groups)) delete data.s[key];
+      else { normalize(key); retitle(key); }
+      save();
+      return true;
+    }
     function reset(key) { delete data.s[key]; save(); }
     function resetAll() { data.s = {}; save(); }
     const snapshot = () => JSON.stringify(data);
     function restore(snap) { data = norm(JSON.parse(snap)); inject(); save(); }
-    function reload() { data = norm(io.get()); inject(); }
+    function reload() { data = norm(io.get()); inject(); rev++; }
     /** Старые постоянные замены (ключ swaps: "1A-B-0" → id) переносятся в правки программы. */
     function migrateSwaps(swaps) {
       let n = 0;
@@ -310,8 +440,9 @@
     return {
       sess, edited, letters, strengthIdx, item, variants, paramHolder, exHolder, exIds, count, usedIds, exFromLib, progOf, setUnit,
       replace, revert, setParams, move, arrange, swapWith, toGroup, remove, add, moveGroup, setGroup, split, removeGroup,
+      copy, clear, setTitle, baseTitle, putItem, titled: (key) => !!(data.s[key] && data.s[key].t), rev: () => rev,
       reset, resetAll, snapshot, restore, reload, migrateSwaps,
-      editedKeys: () => Object.keys(data.s), forkInfo: (key) => data.s[key] || null, customs: () => data.x
+      editedKeys: () => Object.keys(data.s).filter(edited), forkInfo: (key) => (edited(key) ? data.s[key] : null), customs: () => data.x
     };
   }
   window.PlanModel = { create, isStrength, exerciseFromLib, LETTERS };

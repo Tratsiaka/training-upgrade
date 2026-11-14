@@ -15,7 +15,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Апгрейд">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="css/app.css?v=c4c4b86f">
+<link rel="stylesheet" href="css/app.css?v=151f85bb">
 </head>
 <body>
 <header class="top">
@@ -25,12 +25,13 @@
     <div class="grow"><h1 id="title">Сегодня</h1><div class="sub" id="sub"></div></div>
     <span class="offline" id="offline" hidden>офлайн</span>
     <button class="icon-btn sync-ind" id="syncBtn" hidden></button>
+    <button class="icon-btn" id="timerBtn" aria-label="Таймер отдыха" hidden></button>
     <button class="icon-btn" id="themeBtn" aria-label="Переключить тему"></button>
   </div>
 </header>
 <main class="wrap" id="app"></main>
 <nav class="nav" aria-label="Разделы"><div class="nav-in" id="nav"></div></nav>
-<button class="fab" id="fab" aria-label="Таймер отдыха"></button>
+<div class="tbar" id="tBar" hidden><button class="fab" id="fab" aria-label="Таймер отдыха"></button><button class="tbar-b" id="tPlus" data-plus="1" aria-label="Добавить 15 секунд">+15 с</button><button class="tbar-b" id="tStop" data-stop="" aria-label="Остановить таймер">✕</button></div>
 <div class="timer-panel" id="tPanel" role="dialog" aria-label="Таймер отдыха">
   <div class="timer-big" id="tBig">0:00</div>
   <div class="timer-presets">
@@ -42,12 +43,12 @@
   </div>
 </div>
 <noscript><p style="padding:16px">Для работы программы нужен JavaScript.</p></noscript>
-<script src="js/store.js?v=c4c4b86f"></script>
-<script src="js/config.js?v=c4c4b86f"></script>
-<script src="js/program.js?v=c4c4b86f"></script>
-<script src="js/sync.js?v=c4c4b86f"></script>
-<script src="js/charts.js?v=c4c4b86f"></script>
-<script src="js/plan.js?v=c4c4b86f"></script>
-<script src="js/app.js?v=c4c4b86f"></script>
+<script src="js/store.js?v=151f85bb"></script>
+<script src="js/config.js?v=151f85bb"></script>
+<script src="js/program.js?v=151f85bb"></script>
+<script src="js/sync.js?v=151f85bb"></script>
+<script src="js/charts.js?v=151f85bb"></script>
+<script src="js/plan.js?v=151f85bb"></script>
+<script src="js/app.js?v=151f85bb"></script>
 </body>
 </html>

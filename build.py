@@ -77,7 +77,7 @@ for ex_id, ex in program["exercises"].items():
         missing.append(ex_id)
     if did:
         x = by_id[did]
-        ex["ds"] = {"id": did, "n": clean(x["name"]), "nr": names_ru[did], "s": x["instruction_steps"]["ru"], "m": f'{did}-{x["media_id"]}'}
+        ex["ds"] = {"id": did, "n": clean(x["name"]), "nr": names_ru[did], "s": x["instruction_steps"]["ru"], "m": f'{did}-{x["media_id"]}', "eq": x.get("equipment") or ""}
 if missing:
     raise SystemExit(f"нет в ds-map.json: {missing}")
 

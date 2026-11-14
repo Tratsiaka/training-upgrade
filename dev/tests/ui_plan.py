@@ -35,6 +35,7 @@ async def main():
         await page.click('#sheet [data-sa="sets"][data-v="1"]'); await page.wait_for_timeout(120)
         await page.click('#sheet [data-sa="reps"][data-v="8–12"]'); await page.wait_for_timeout(120)
         await page.click('#sheet [data-sa="rir"][data-v="1"]'); await page.wait_for_timeout(120)
+        await page.click('#sheet .sh-more summary'); await page.wait_for_timeout(120)  # темп и подсказка — в свёрнутом «Ещё»
         await page.fill('#shNote', "пауза внизу"); await page.press('#shNote', "Enter"); await page.wait_for_timeout(150)
         await page.fill('#shTempo', "2 с вниз"); await page.click('#sheet [data-sa="rir"][data-v="1–2"]'); await page.wait_for_timeout(200)
         st = await page.evaluate("JSON.stringify(window.__UPG.sessOf('1A').groups[1].items[0])")
@@ -74,6 +75,7 @@ async def main():
         check(s1A[0].startswith("pair:legpress") and "hack" in s2A[0], f"revert only here: {s1A[0]} / {s2A[0]}")
         # 3. move down across group boundary
         await page.click('[data-pi="1:1"]'); await page.wait_for_timeout(300)   # A2 deadbug
+        await page.click('#sheet .sh-more summary'); await page.wait_for_timeout(120)  # «место» — в «Ещё»
         await page.click('#sheet [data-sa="move"][data-v="1"]'); await page.wait_for_timeout(200)
         where = await page.text_content("#sheet .sh-where")
         check("B1" in where, "moved into B as B1: " + where)
@@ -82,6 +84,7 @@ async def main():
         check(s[0] == "single:legpress" and s[1].startswith("tri:deadbug,bench"), f"structure after move: {s[:2]}")
         # 4. swap places
         await page.click('[data-pi="1:0"]'); await page.wait_for_timeout(300)
+        await page.click('#sheet .sh-more summary'); await page.wait_for_timeout(120)
         await page.click('#sheet [data-sa="swapwith"]'); await page.wait_for_timeout(200)
         n_opts = await page.locator('#sheet [data-sa="swapto"]').count()
         await page.click('#sheet [data-sa="swapto"][data-v="3:1"]'); await page.wait_for_timeout(250)
@@ -105,10 +108,11 @@ async def main():
         # 6. Today reflects
         await page.goto(APP + "?tab=today"); await page.wait_for_timeout(400)
         await page.click('button[data-day="A"]'); await page.wait_for_timeout(200)
+        if not await page.locator('button[data-time="120"]').is_visible(): await page.click('[data-ctl]')  # время спрятано за «90 мин · Норм ▾»
         await page.click('button[data-time="120"]'); await page.wait_for_timeout(200)
-        names = await page.locator(".group .ex-name").all_inner_texts()
+        names = await page.locator(".group .ex[data-ex] .ex-name").all_inner_texts()  # силовые карточки, без разминки
         codes = await page.locator(".group .code").all_inner_texts()
-        check(names[3:5] == ["Молотковые сгибания", "Разгибания из-за головы (локоть до 90°)"] or "Молотковые сгибания" in names, f"today shows edited order: {names[:8]}")
+        check(names[:5] == ["Молотковые сгибания", "Разгибания из-за головы (локоть до 90°)", "Жим ногами", "Махи в стороны в тренажёре", "Жук (dead bug)"], f"today shows edited order: {names[:8]}")
         check(codes[:3] == ["A1", "B1", "B2"], f"today codes relabeled: {codes[:6]}")
         mine = await page.locator(".mine-note").count()
         check(mine == 1, "today notes edited session")
@@ -118,9 +122,9 @@ async def main():
         check(sc == "Сегодня", "today default scope: " + sc)
         await page.locator('#sheet [data-sa="pick"]').first.click(); await page.wait_for_timeout(300)
         t = await toast_text(page)
-        first = (await page.locator(".group .ex-name").all_inner_texts())[0]
+        first = (await page.locator(".group .ex[data-ex] .ex-name").all_inner_texts())[0]
         note = await page.locator(".swap-note").count()
-        check(t.startswith("Сегодня «") and note == 1, f"today swap: {t} | first={first}")
+        check(t.startswith("Сегодня «") and note == 1 and t.split("«")[1].split("»")[0] == first, f"today swap: {t} | first={first}")
         s = await sess(page, "1A")
         check(s[0] == "single:hammer_curl", "program unchanged by today swap")
         await page.click(".swap-note [data-repback]"); await page.wait_for_timeout(200)

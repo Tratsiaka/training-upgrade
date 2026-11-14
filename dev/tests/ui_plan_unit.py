@@ -13,13 +13,14 @@ async def main():
         await page.locator(".lib-row").first.click(); await page.wait_for_timeout(200)
         print("lib row:", await page.locator(".lib-row .lib-n").first.inner_text())
         await page.click("[data-libadd]"); await page.wait_for_timeout(300)
-        print("add sheet title:", await page.text_content("#sheetTitle"), "| reps label:", await page.text_content('label[for="shAReps"]'))
+        print("add sheet title:", await page.text_content("#sheetTitle"), "| reps label:", await page.locator('#sheet .qe .fl').nth(1).text_content())
         await page.click('#sheet [data-sa="adddo"]'); await page.wait_for_timeout(300)
         await page.goto(APP + "?tab=plan"); await page.wait_for_timeout(400)
         await page.click('[data-pb="1"]'); await page.click('[data-pd="A"]'); await page.wait_for_timeout(200)
         last = page.locator(".prow").last
         print("last row:", (await last.inner_text()).replace("\n", " | "))
         await last.click(); await page.wait_for_timeout(300)
+        await page.click('#sheet .sh-more summary'); await page.wait_for_timeout(120)  # «Считать» — в «Ещё»
         units = await page.locator('#sheet [data-sa="unit"]').count()
         print("unit toggle shown:", units)
         if units:

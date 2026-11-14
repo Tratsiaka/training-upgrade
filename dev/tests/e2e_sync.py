@@ -60,7 +60,8 @@ async def main():
         print("first start shows sign-in:", await A.locator("#login.open").count() == 1, "| title:", await A.locator("#lgTitle").inner_text())
         await A.click('[data-lg="skip"]'); await A.wait_for_timeout(300)
         await A.click('button[data-day="A"]')
-        await A.locator('button[data-toggle="log"]').first.click()
+        if not await A.locator('input[data-log][data-f="w"]').first.is_visible():  # активное упражнение уже раскрыто
+            await A.locator('button[data-toggle="log"]').first.click()
         await A.locator('input[data-log][data-f="w"]').first.fill("140")
         await A.locator('input[data-log][data-f="r"]').first.fill("10")
         await A.wait_for_timeout(300)
@@ -125,7 +126,8 @@ async def main():
         await B.click('button[data-day="A"]')
         if not await B.locator('input[data-log][data-f="w"]').first.is_visible():
             await B.locator('button[data-toggle="log"]').first.click()
-        await B.locator('input[data-log][data-f="w"]').first.fill("145"); await B.wait_for_timeout(3500)
+        await B.locator('input[data-log][data-f="w"]').first.fill("145")
+        await B.locator('input[data-log][data-f="r"]').first.fill("9"); await B.wait_for_timeout(3500)  # вес без повторов не записывается
         await A.evaluate("window.Sync.syncNow()"); await A.wait_for_timeout(1500)
         print("A has B's newer weight 145:", await A.evaluate("JSON.stringify(window.Store.get('logs')).includes('\"145\"')"))
 

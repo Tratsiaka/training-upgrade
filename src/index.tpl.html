@@ -25,12 +25,13 @@
     <div class="grow"><h1 id="title">Сегодня</h1><div class="sub" id="sub"></div></div>
     <span class="offline" id="offline" hidden>офлайн</span>
     <button class="icon-btn sync-ind" id="syncBtn" hidden></button>
+    <button class="icon-btn" id="timerBtn" aria-label="Таймер отдыха" hidden></button>
     <button class="icon-btn" id="themeBtn" aria-label="Переключить тему"></button>
   </div>
 </header>
 <main class="wrap" id="app"></main>
 <nav class="nav" aria-label="Разделы"><div class="nav-in" id="nav"></div></nav>
-<button class="fab" id="fab" aria-label="Таймер отдыха"></button>
+<div class="tbar" id="tBar" hidden><button class="fab" id="fab" aria-label="Таймер отдыха"></button><button class="tbar-b" id="tPlus" data-plus="1" aria-label="Добавить 15 секунд">+15 с</button><button class="tbar-b" id="tStop" data-stop="" aria-label="Остановить таймер">✕</button></div>
 <div class="timer-panel" id="tPanel" role="dialog" aria-label="Таймер отдыха">
   <div class="timer-big" id="tBig">0:00</div>
   <div class="timer-presets">

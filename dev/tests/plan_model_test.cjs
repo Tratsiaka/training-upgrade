@@ -109,3 +109,182 @@ stored = null; const m3 = PM.create(P, { get: () => stored, set: (v) => { stored
 const mig = m3.migrateSwaps({ "1A-B-0": "machine_press", "2B-B-0": "rdl", "9Z-Q-0": "x", "1B-A-0": "pulldown" });
 assert(mig === 2 && m3.sess("1A").groups.find((x) => x.id === "B").items[0].ex === "machine_press" && m3.sess("1B").groups.find((x) => x.id === "A").items[0].ex === "pulldown", "migrate swaps (weekAlt skipped): " + mig);
 console.log("used ids:", m3.usedIds().size, "| edited:", m3.editedKeys());
+
+/* ---- тренировка целиком: copy / clear / setTitle ---- */
+{
+  let st = null;
+  const w = PM.create(P, { get: () => st, set: (v) => { st = v; } });
+  const strength = (k) => w.sess(k).groups.filter(PM.isStrength);
+  const flat = (k) => strength(k).flatMap((g) => g.items);
+  // источник 1A: замена, параметры, добавленное упражнение из базы
+  const gA = w.sess("1A").groups.findIndex((g) => g.id === "A");
+  w.replace("1A", gA, 0, "", "hack", false);
+  w.setParams("1A", gA, 1, "", { sets: 5 });
+  const cx = w.exFromLib({ id: "0334", n: "dumbbell lateral raise", r: "Махи гантелями в стороны", t: "delts", sec: ["shoulders"], s: [], m: "zz" });
+  w.add("1A", cx, { sets: 2, reps: "15–20" }, "new", "std");
+  w.setTitle("1A", "Ноги и жим");
+  // получатель 3A уже изменён — копия его перезапишет
+  w.remove("3A", gA, 0);
+  const snapCopy = w.snapshot();
+  const n = w.copy("1A", ["2A", "3A", "1A", "9Z"]);
+  assert(n === 2, "copy: 2 targets (self and unknown skipped): " + n);
+  assert(JSON.stringify(strength("2A").map((g) => g.items.map((it) => it.ex || it.weekAlt.map((x) => x.ex).join("/")))) === JSON.stringify(strength("1A").map((g) => g.items.map((it) => it.ex || it.weekAlt.map((x) => x.ex).join("/")))), "copy: same exercises and order as source");
+  assert(flat("3A").length === flat("1A").length, "copy overwrites already edited target");
+  // пометки относительно получателя (2A в программе — те же упражнения, что 1A)
+  const it2 = w.sess("2A").groups[gA].items;
+  assert(it2[0].ex === "hack" && it2[0].orig === "legpress" && !it2[0].add, "copy: replacement keeps orig when target program has it");
+  assert(it2[0].chg === 1, "copy: params differ from target program (block 2 scheme) → chg");
+  assert(it2[1].ex === "deadbug" && it2[1].add === 1 && !it2[1].chg, "copy: exercise absent in target program → add");
+  const addIt = flat("2A").find((it) => it.ex === cx);
+  assert(addIt && addIt.add === 1 && P.exercises[cx], "copy: custom x exercise copied, marked add");
+  const benchFlags = (k) => { const b = flat(k).find((it) => it.ex === "bench"); return b ? [b.chg, b.add, b.orig].map(Boolean).join() : "none"; };
+  assert(benchFlags("2A") === "true,false,false", "copy: same exercise with source params → chg only");
+  const h3 = flat("3A").find((it) => it.ex === "hack");
+  assert(h3 && !h3.orig && h3.add === 1, "copy to other block with other program: orig dropped, marked add");
+  // независимость: правка копии не трогает источник
+  w.setParams("2A", gA, 1, "", { sets: 2 });
+  assert(w.sess("1A").groups[gA].items[1].sets === 5 && w.sess("2A").groups[gA].items[1].sets === 2, "copy is deep (independent of source)");
+
+  assert(w.sess("2A").title === "Ноги и жим", "copy carries renamed title");
+  // weekAlt: 2B (становая / румынская) → 3B, вариант 1 заменён
+  const gW = w.sess("2B").groups.findIndex((g) => g.items && g.items.some((it) => it.weekAlt));
+  const iW = w.sess("2B").groups[gW].items.findIndex((it) => it.weekAlt);
+  w.replace("2B", gW, iW, "1", "hipthrust", false);
+  w.copy("2B", ["3B"]);
+  const wa = w.sess("3B").groups[gW].items[iW];
+  assert(wa.weekAlt && wa.weekAlt[1].ex === "hipthrust" && wa.weekAlt[0].ex === "deadlift", "copy: weekAlt items copied with variants");
+  // в программе 3B нет пары «становая / румынская» — пункт «добавлен», и «вернуть» в нём некуда
+  assert(!P.sessions["3B"].groups.some((g) => (g.items || []).some((it) => it.weekAlt)) && wa.add === 1 && !wa.weekAlt[0].orig && !wa.weekAlt[1].orig, "copy: weekAlt item absent in target program → add, orig dropped: " + JSON.stringify(wa.weekAlt.map((x) => x.orig || "")));
+  // 1A → 1B: исходное упражнение замены в программе 1B нет — orig убирается, пункт помечен add
+  w.copy("1A", ["1B"]);
+  const hb = flat("1B").find((it) => it.ex === "hack");
+  assert(hb && !hb.orig && hb.add === 1, "copy to other day: orig dropped when not in target program");
+  assert(w.sess("1B").title === "Ноги и жим", "copy to other day: title carried");
+  // туда и обратно: пункты, которые в 1A не менялись, после 1A → 2A → 1A снова без пометок
+  w.copy("2A", ["1A"]);
+  assert(benchFlags("1A") === "false,false,false" && w.sess("1A").groups[gA].items[0].orig === "legpress", "copy back: untouched items lose markers, replacement keeps orig");
+  // сброс получателя
+  w.reset("2A");
+  assert(!w.edited("2A") && w.sess("2A").title === P.sessions["2A"].title, "reset target after copy");
+  // откат копии одним снимком
+  w.restore(snapCopy);
+  assert(!w.edited("2A") && !w.edited("1B") && w.edited("3A") && !flat("3A").some((it) => it.ex === "hack") && flat("3A").length === flat("2A").length - 1, "restore snapshot undoes copy (3A back to its own edit)");
+  // clear
+  const fixedBefore = w.sess("2A").groups.filter((g) => !PM.isStrength(g)).map((g) => g.kind).join(",");
+  const removedN = w.clear("2A");
+  assert(removedN === 6 && strength("2A").length === 0, "clear removes all strength groups: " + removedN);
+  assert(w.sess("2A").groups.map((g) => g.kind).join(",") === fixedBefore, "clear keeps warmup/finisher: " + fixedBefore);
+  assert(w.edited("2A"), "clear is an edit");
+  const pos = w.add("2A", "face_pull", { sets: 3 }, "new", "core");
+  assert(w.sess("2A").groups.map((g) => g.kind).join(",") === "warmup,single,sprint,z2" && pos.gi === 1, "add into empty workout goes after warmup, before finisher");
+  w.clear("2C"); w.add("2C", "face_pull", {}, "new");
+  assert(w.sess("2C").groups.map((g) => g.kind).join(",") === "n4x4,single,skill", "add into empty C: after motor, before skill");
+  w.reset("2A");
+  assert(strength("2A").length === 6, "reset after clear restores program");
+  // setTitle: только название — тренировка не считается изменённой, связки берутся из программы
+  w.setTitle("3C", "  Мотор   и руки ");
+  assert(w.sess("3C").title === "Мотор и руки" && !w.edited("3C") && w.titled("3C") && w.forkInfo("3C") === null && !w.editedKeys().includes("3C"), "title-only rename: stored (trimmed), not reported as edited");
+  assert(st.s["3C"].t === "Мотор и руки" && Array.isArray(st.s["3C"].g) && st.s["3C"].g.length === P.sessions["3C"].groups.length && typeof st.s["3C"].to === "string", "title stored in s[key].t with full groups (for older versions) and a title-only mark");
+  w.setTitle("3C", "");
+  assert(w.sess("3C").title === P.sessions["3C"].title && !w.edited("3C") && !st.s["3C"], "empty title → built-in, entry removed");
+  w.setTitle("3C", "Своё"); w.setParams("3C", 1, 0, "", { sets: 4 });
+  assert(w.edited("3C") && !st.s["3C"].to && w.sess("3C").title === "Своё" && w.sess("3C").groups[1].items[0].sets === 4, "real edit after rename: edited, mark cleared, title kept");
+  w.setTitle("3C", P.sessions["3C"].title);
+  assert(w.edited("3C") && !st.s["3C"].t && w.sess("3C").title === P.sessions["3C"].title, "title equal to built-in clears override, other edits kept");
+  w.setTitle("3C", "Своё"); w.reset("3C");
+  assert(!w.edited("3C") && !w.titled("3C") && w.sess("3C").title === P.sessions["3C"].title, "reset clears title");
+  // программа обновилась — переименованная (только название) тренировка получает новую программу
+  w.setTitle("1C", "Старой версии не мешает");
+  const P2 = JSON.parse(JSON.stringify(P)); P2.sessions["1C"].groups[1].items[0].sets = 9;
+  const w2 = PM.create(P2, { get: () => JSON.parse(JSON.stringify(st)), set: () => {} });
+  assert(w2.sess("1C").groups[1].items[0].sets === 9 && w2.sess("1C").title === "Старой версии не мешает" && !w2.edited("1C"), "title-only entry follows program updates");
+  const reloaded = PM.create(P, { get: () => st, set: () => {} });
+  assert(reloaded.sess("1C").title === "Старой версии не мешает", "title persists through reload");
+  // предыдущая версия приложения (настоящий plan.js из снимка, если задан OLD_PLAN_JS): видит обычную правку, правит — новая версия это видит
+  const OLD = process.env.OLD_PLAN_JS, fs = require("fs");
+  if (OLD && fs.existsSync(OLD)) {
+    const box = { window: {} }; require("vm").runInNewContext(fs.readFileSync(OLD, "utf8"), box);
+    let oldSt = JSON.parse(JSON.stringify(st));
+    const om = box.window.PlanModel.create(P, { get: () => oldSt, set: (v) => { oldSt = v; } });
+    const og = om.sess("1C").groups;
+    assert(Array.isArray(og) && og.length === P.sessions["1C"].groups.length && om.sess("1C").title === P.sessions["1C"].title, "old build: renamed entry renders with groups and its built-in title");
+    om.setParams("1C", 1, 0, "", { sets: 7 });
+    assert(oldSt.s["1C"].t === "Старой версии не мешает", "old build keeps t when editing");
+    const back = PM.create(P, { get: () => oldSt, set: () => {} });
+    assert(back.edited("1C") && back.sess("1C").groups[1].items[0].sets === 7 && back.sess("1C").title === "Старой версии не мешает", "edit made in old build is seen as a real edit (mark no longer matches)");
+    om.setParams("2A", 1, 0, "", { sets: 2 });
+    assert(PM.create(P, { get: () => oldSt, set: () => {} }).sess("2A").groups[1].items[0].sets === 2, "old build edit on another workout reads back");
+  } else console.log("skip: old build plan.js not given (OLD_PLAN_JS)");
+}
+
+/* ---- доработка: копия только силовой части, дубли, пустые, отмена одного пункта, тире, счётчик ---- */
+{
+  let st = null;
+  const w = PM.create(P, { get: () => st, set: (v) => { st = v; } });
+  const kinds = (k) => w.sess(k).groups.map((g) => g.kind).join(",");
+  const strengthEx = (k) => w.sess(k).groups.filter(PM.isStrength).map((g) => g.items.map((it) => it.ex || it.weekAlt.map((x) => x.ex).join("/")).join(",")).join(" ");
+  w.copy("1A", ["1C"]);
+  assert(kinds("1C") === "n4x4,pair,pair,tri,pair,pair,pair,skill" && strengthEx("1C") === strengthEx("1A"), "copy A → C: C keeps intervals and skill, gets A's strength part");
+  assert(w.sess("1C").note === P.sessions["1C"].note, "copy keeps target session note");
+  w.copy("1C", ["1A"]);
+  assert(kinds("1A") === "warmup,pair,pair,tri,pair,pair,pair,sprint,z2", "copy C → A keeps A's warm-up and finishers");
+  w.reset("1A"); w.reset("1C");
+  w.copy("1A", ["2A"]);
+  assert(JSON.stringify(w.sess("2A").groups[0]) === JSON.stringify(P.sessions["2A"].groups[0]), "copy keeps the target block's own warm-up text");
+  const ids = w.sess("2A").groups.map((g) => g.id);
+  assert(new Set(ids).size === ids.length, "copy: unique group ids in target: " + ids.join(","));
+  w.reset("2A");
+  // одно упражнение дважды: второе — «добавлено»
+  const gA = w.sess("1A").groups.findIndex((g) => g.id === "A");
+  w.add("1A", "legpress", { sets: 2 }, "new");
+  w.copy("1A", ["2A"]);
+  const lp = w.sess("2A").groups.flatMap((g) => g.items || []).filter((it) => it.ex === "legpress");
+  assert(lp.length === 2 && !lp[0].add && lp[1].add === 1, "copy: duplicate exercise consumes base item, second marked add");
+  w.reset("1A"); w.reset("2A");
+  // пустой источник не копируется, пустая тренировка не очищается повторно
+  w.clear("1B");
+  const snap = w.snapshot();
+  assert(w.copy("1B", ["2B"]) === 0 && w.snapshot() === snap, "copy from an empty workout does nothing");
+  assert(w.clear("1B") === 0 && w.snapshot() === snap, "clear on a workout without strength groups is a no-op");
+  assert(w.clear("2B") === 6 && w.clear("2B") === 0, "clear twice: second is a no-op");
+  w.reset("1B"); w.reset("2B");
+  assert(w.clear("3C") > 0 && !w.sess("3C").groups.some(PM.isStrength) && w.sess("3C").groups[0].kind === "n4x4", "clear C keeps intervals and skill");
+  w.reset("3C");
+  // отмена одного пункта
+  w.setParams("1A", gA, 1, "", { sets: 5 });
+  const saved = JSON.parse(JSON.stringify(w.item("1A", gA, 0)));
+  w.setParams("1A", gA, 0, "", { sets: 6, reps: "8-12" });
+  assert(w.item("1A", gA, 0).reps === "8–12", "reps dash normalised: 8-12 → 8–12");
+  w.putItem("1A", gA, 0, saved);
+  assert(w.item("1A", gA, 0).sets === 3 && !w.item("1A", gA, 0).chg && w.item("1A", gA, 1).sets === 5, "putItem restores one item, other edits stay");
+  w.reset("1A");
+  w.setParams("1A", gA, 0, "", { sets: 6 }); w.putItem("1A", gA, 0, saved);
+  assert(!w.edited("1A"), "putItem back to program → workout not edited");
+  w.setTitle("1A", "Имя"); w.setParams("1A", gA, 0, "", { sets: 6 }); w.putItem("1A", gA, 0, saved);
+  assert(w.titled("1A") && w.sess("1A").title === "Имя", "putItem keeps the title");
+  w.reset("1A");
+  const r0 = w.rev(); w.setParams("1A", gA, 0, "", { sets: 4 }); const r1 = w.rev(); w.reload(); const r2 = w.rev();
+  assert(r1 > r0 && r2 > r1, "rev counts saves and reloads");
+  const pos = w.add("1A", "face_pull", { reps: "12-15" }, "new");
+  assert(w.item("1A", pos.gi, pos.ii).reps === "12–15", "add normalises dash");
+}
+
+/* ---- финальная доработка: отмена на переименованной, оборудование из базы ---- */
+{
+  let st = null;
+  const w = PM.create(P, { get: () => st, set: (v) => { st = v; } });
+  const gA = w.sess("1A").groups.findIndex((g) => g.id === "A");
+  w.setTitle("1A", "Мой низ");
+  const saved = JSON.parse(JSON.stringify(w.item("1A", gA, 0)));
+  w.setParams("1A", gA, 0, "", { sets: 5 });
+  assert(w.edited("1A"), "renamed + edited → edited");
+  w.putItem("1A", gA, 0, saved);
+  assert(!w.edited("1A") && w.titled("1A") && w.sess("1A").title === "Мой низ" && st.s["1A"].to, "putItem back to program on a renamed workout → title-only again (not edited)");
+  w.setParams("1A", gA, 0, "", { sets: 5 }); w.setParams("1A", gA, 0, "", { sets: 3 });
+  assert(w.edited("1A"), "manual param change back still counts as edited (chg marker)");
+  w.reset("1A");
+  const d = PM.exerciseFromLib({ id: "2133", n: "farmers walk", r: "Прогулка фермера", t: "forearms", eq: "dumbbell", sec: [], s: [], m: "q" });
+  assert(d.ds.eq === "dumbbell" && d.unit === "sec", "exerciseFromLib keeps the equipment (ds.eq) for timed loaded exercises");
+  const d2 = PM.exerciseFromLib({ id: "1", n: "push-up", t: "pectorals", sec: [], s: [], m: "q" });
+  assert(!("eq" in d2.ds), "no eq in the record → no eq field");
+}

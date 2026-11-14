@@ -9,6 +9,12 @@ today = datetime.date.today()
 iso = lambda d: d.isoformat()
 
 
+async def open_ctl(page):
+    """Время и самочувствие на «Сегодня» спрятаны за строкой «90 мин · Норм ▾» — раскрыть, если свёрнуты."""
+    if not await page.locator('button[data-time="90"]').is_visible():
+        await page.click('[data-ctl]'); await page.wait_for_timeout(60)
+
+
 async def main():
     async with async_playwright() as p:
         b = await p.chromium.launch()
@@ -27,6 +33,7 @@ async def main():
             await page.click('[data-ptab="sched"]'); await page.wait_for_timeout(60)
             await page.select_option('select[data-cycgo]', wk); await page.wait_for_timeout(60)
             await page.click('.nav-i[data-tab="today"]'); await page.wait_for_timeout(60)
+            await open_ctl(page)
             for d in "ABC":
                 for t in ["60", "90", "120"]:
                     for rd in ["ok", "low"]:
@@ -64,11 +71,12 @@ async def main():
         txt = await page.locator("#app").inner_text()
         print("suggested day:", await page.locator('.seg button.on[data-day]').inner_text(), "| next-week banner:", "закрыта" in txt, "| sub:", await page.locator("#sub").inner_text())
         await page.click('button[data-day="C"]'); await page.wait_for_timeout(80)
-        print("C stays in week 1:", "неделя 1" in (await page.locator("#sub").inner_text()))
+        print("C stays in week 1:", "нед. 1 из" in (await page.locator("#sub").inner_text()))  # подзаголовок: «Блок 1 · нед. 1 из 5 · …»
         await page.click('button[data-day="A"]'); await page.wait_for_timeout(80)
         if not await page.locator('input[data-log][data-f="w"]').first.is_visible():
             await page.locator('button[data-toggle="log"]').first.click()
-        await page.locator('input[data-log][data-f="w"]').first.fill("120"); await page.wait_for_timeout(200)
+        await page.locator('input[data-log][data-f="w"]').first.fill("120")
+        await page.locator('input[data-log][data-f="r"]').first.fill("10"); await page.wait_for_timeout(200)  # подход = вес + повторы
         cyc = json.loads(await page.evaluate("localStorage.getItem('upg3:cycle')"))
         print("after first set of new week → cycle:", {k: cyc[k] for k in ("idx", "since")}, "| hist:", cyc["hist"][-1])
         await page.reload(); await page.wait_for_timeout(300)
@@ -94,19 +102,22 @@ async def main():
         await page.click('button[data-wday="4"]'); await page.wait_for_timeout(80)
         print("days now:", json.loads(await page.evaluate("localStorage.getItem('upg3:settings')"))["days"], "| grid:", (await page.locator(".week-grid").inner_text()).replace("\n", " "))
         await page.click('.nav-i[data-tab="today"]'); await page.wait_for_timeout(80)
-        print("day buttons:", (await page.locator('.controls .seg').first.inner_text()).replace("\n", " "))
+        print("day buttons:", (await page.locator('.day-seg').first.inner_text()).replace("\n", " "))
 
         # 5) RIR chip, joints, note, hint
         await page.click('button[data-day="A"]'); await page.wait_for_timeout(80)
         first_ex = page.locator(".ex").filter(has=page.locator('button[data-toggle="log"]')).first
-        if not await first_ex.locator('input[data-log][data-f="w"]').first.is_visible():
-            await first_ex.locator('button[data-toggle="log"]').click()
-        await first_ex.locator('[data-rir$=":1"]').click(); await page.wait_for_timeout(80)
+        # запас спрашивается, когда упражнение закончено: добить подходы ✓ (между касаниями > 500 мс)
+        for _ in range(10):
+            if await first_ex.locator('.rir-ask [data-rir$=":1"]').count(): break
+            await first_ex.locator('.set-ok[aria-pressed="false"]').first.click(); await page.wait_for_timeout(650)
+        await first_ex.locator('.rir-ask [data-rir$=":1"]').click(); await page.wait_for_timeout(80)
         await page.locator('[data-joint="elbow"]').click(); await page.locator('[data-joint="elbow"]').click()
         await page.locator('[data-joint="back"]').click()
         await page.fill('textarea[data-note]', "сон 6 часов"); await page.wait_for_timeout(600)
         e = json.loads(await page.evaluate("localStorage.getItem('upg3:logs')"))[f"{iso(today)}_A"]
         print("entry rir:", e.get("rir"), "| joints:", e.get("s", {}).get("joints"), "| note:", e.get("s", {}).get("note"), "| ready/time:", e.get("ready"), e.get("time"))
+        await open_ctl(page)
         await page.click('button[data-ready="low"]'); await page.wait_for_timeout(80)
         print("ready persisted:", json.loads(await page.evaluate("localStorage.getItem('upg3:logs')"))[f"{iso(today)}_A"]["ready"])
         await page.click('button[data-ready="ok"]')
