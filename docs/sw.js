@@ -1,11 +1,11 @@
 /* Service worker «Апгрейд». Версия меняется при каждой сборке — старые кэши удаляются. */
-const VERSION = "151f85bb";
+const VERSION = "9465c7da";
 const CACHE = "upg-" + VERSION;
 const MEDIA_CACHE = "upg-media";
 const MEDIA_MAX = 150;
 const CORE = [
   "./", "index.html", "manifest.webmanifest",
-  "css/app.css?v=151f85bb", "js/store.js?v=151f85bb", "js/config.js?v=151f85bb", "js/program.js?v=151f85bb", "js/sync.js?v=151f85bb", "js/charts.js?v=151f85bb", "js/plan.js?v=151f85bb", "js/app.js?v=151f85bb",
+  "css/app.css?v=9465c7da", "js/store.js?v=9465c7da", "js/config.js?v=9465c7da", "js/program.js?v=9465c7da", "js/sync.js?v=9465c7da", "js/charts.js?v=9465c7da", "js/plan.js?v=9465c7da", "js/programs.js?v=9465c7da", "js/app.js?v=9465c7da",
   "icons/favicon.svg", "icons/favicon-32.png", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"
 ];
 

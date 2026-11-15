@@ -41,7 +41,7 @@ async def main():
         await fresh(page, "library")
         await page.click('[data-libbp="fav"]'); await page.wait_for_timeout(200)
         empty = await page.locator(".lib-favempty").inner_text() if await page.locator(".lib-favempty").count() else ""
-        check("Избранного пока нет" in empty and "☆" in empty, "library «Избранное»: empty state with a hint: " + empty)
+        check("Избранного пока нет" in empty and "звезд" in empty and await page.locator(".lib-favempty .empty-ic .ic").count() == 1, "library «Избранное»: empty state with an icon and a hint: " + empty)
         chips = await page.evaluate("Array.from(document.querySelectorAll('[data-libbp]')).map(c => c.dataset.libbp).slice(0, 3)")
         check(chips == ["all", "fav", "prog"], f"«Избранное» chip right after «Все»: {chips}")
         await page.click('[data-libbp="all"]'); await page.wait_for_timeout(200)
@@ -58,7 +58,7 @@ async def main():
         det = page.locator(".lib-d .lib-fav")
         k2 = await det.get_attribute("data-fav")
         await det.click(); await page.wait_for_timeout(150)
-        check(await det.inner_text() == "★ В избранном" and await page.locator(f'.lib-item .star[data-fav="{k2}"]').get_attribute("aria-pressed") == "true", "detail star toggles and syncs the row star")
+        check(await det.inner_text() == "В избранном" and await det.locator('use[href="#i-star-fill"]').count() == 1 and await page.locator(f'.lib-item .star[data-fav="{k2}"]').get_attribute("aria-pressed") == "true", "detail star toggles and syncs the row star")
         await page.reload(); await page.wait_for_timeout(700)
         check(await favs(page) == [k2, k1] and await page.locator(f'.lib-item .star[data-fav="{k1}"]').get_attribute("aria-pressed") == "true", "favourites persist across reload")
         await page.click('[data-libbp="fav"]'); await page.wait_for_timeout(200)
@@ -111,7 +111,7 @@ async def main():
         d3 = await page.evaluate(f"{ISO}(3)"); d40 = await page.evaluate(f"{ISO}(40)")
         logs = {k.replace("__D3__", d3).replace("__D40__", d40): v for k, v in logs.items()}
         # запись базы без привязки к программе (в сборке часть записей привязана к упражнениям программы)
-        await fresh(page, "plan"); await open_add(page); await page.wait_for_timeout(600)
+        await fresh(page, "plan&s=1A"); await open_add(page); await page.wait_for_timeout(600)
         await page.fill('#sheet [data-sq]', "жим")  # база подгружается при первом поиске
         await page.wait_for_function("window.__UPG.LIB.items && window.__UPG.LIB.items.length > 0", timeout=15000)
         DS = await page.evaluate("window.__UPG.LIB.items.find(x => x.bp === 'shoulders' && !window.__UPG.PM.progOf(x.id)).id")
@@ -121,8 +121,8 @@ async def main():
         await open_add(page)
         await page.wait_for_timeout(500)
         sec = await sections(page)
-        favr = await section_rows(page, "★ Избранное"); rec = await section_rows(page, "Недавние")
-        check(sec[:2] == ["★ Избранное", "Недавние"], f"empty search: «Избранное» and «Недавние» on top: {sec[:3]}")
+        favr = await section_rows(page, "Избранное"); rec = await section_rows(page, "Недавние")
+        check(sec[:2] == ["Избранное", "Недавние"], f"empty search: «Избранное» and «Недавние» on top: {sec[:3]}")
         check(favr == ["hammer_curl", DS], f"favourites: program + base exercise: {favr}")
         check(rec[0] == "pullup_w" and "legext" in rec and "face_pull" not in rec, f"recents: journal (3 days) first, picked earlier after, 40 days ago excluded: {rec}")
         mark = await page.evaluate("document.querySelector('#pickList .pk[data-v=\"hammer_curl\"] .pk-in') ? document.querySelector('#pickList .pk[data-v=\"hammer_curl\"] .pk-in').textContent : ''")
@@ -140,7 +140,7 @@ async def main():
         rec2 = await section_rows(page, "Недавние")
         check(await sheet_title(page) == "Добавить упражнение", "add more → back to picker")
         cid = "ds_" + DS
-        favr2 = await section_rows(page, "★ Избранное")
+        favr2 = await section_rows(page, "Избранное")
         inmark = await page.evaluate("(c) => document.querySelector(`#pickList .pk[data-v=\"${c}\"] .pk-in`) !== null", cid)
         check(await page.evaluate("(c) => !!window.PROGRAM.exercises[c]", cid) and cid in favr2 and inmark, f"added base favourite becomes a program exercise, marked in workout: {favr2}")
         # фильтры: «Руки», вместе с поиском, сохраняются между добавлениями
@@ -169,15 +169,15 @@ async def main():
         await page.click('#sheet .sheet-h [data-sa="close"]'); await page.wait_for_timeout(350)
 
         # 3. замена: похожие первыми, затем избранное/недавние; заменяемое исключено; выбор работает
-        await page.evaluate("window.__UPG.PM.reset('1A')"); await page.click('[data-pd="B"]'); await page.click('[data-pd="A"]'); await page.wait_for_timeout(150)
+        await page.evaluate("window.__UPG.PM.reset('1A')"); await page.evaluate("window.__UPG.render()"); await page.wait_for_timeout(150)
         await page.evaluate("(c) => localStorage.setItem('upg3:favs', JSON.stringify(['legpress', 'hammer_curl', c]))", cid)
         await page.reload(); await page.wait_for_timeout(500)
-        await page.click('[data-pd="A"]'); await page.wait_for_timeout(150)
+        if await page.locator('.sess-list').count(): await page.click('[data-pd="A"]'); await page.wait_for_timeout(150)  # перезагрузка открывает тот же экран
         await page.click('.pr-open[data-pi="1:0"]'); await page.wait_for_timeout(300)
         await page.click('#sheet [data-sa="replace"]'); await page.wait_for_timeout(500)
         sec = await sections(page)
-        favr = await section_rows(page, "★ Избранное")
-        check(sec[0].startswith("Похожие") and "★ Избранное" in sec and sec.index("★ Избранное") > 0, f"replace: alternatives first, then favourites: {sec}")
+        favr = await section_rows(page, "Избранное")
+        check(sec[0].startswith("Похожие") and "Избранное" in sec and sec.index("Избранное") > 0, f"replace: alternatives first, then favourites: {sec}")
         check("legpress" not in favr and "hammer_curl" in favr, f"replaced exercise excluded from favourites: {favr}")
         await page.click('#pickList .pk[data-sa="pick"][data-v="hammer_curl"]'); await page.wait_for_timeout(350)
         ex0 = await page.evaluate("window.__UPG.sessOf('1A').groups[1].items[0].ex")
@@ -188,7 +188,7 @@ async def main():
         await page.goto(APP + "?tab=today"); await page.wait_for_timeout(400)
         await page.click('button[data-day="B"]'); await page.wait_for_timeout(150)
         await page.locator('[data-rep]').first.click(); await page.wait_for_timeout(500)
-        check("★ Избранное" in await sections(page), "Today replace sheet shows favourites too")
+        check("Избранное" in await sections(page), "Today replace sheet shows favourites too")
         planB = await page.evaluate("JSON.stringify(window.__UPG.sessOf('1B').groups)")
         pk = await page.locator('#pickList .pk[data-sa="pick"]').nth(1).get_attribute("data-v")
         await page.locator('#pickList .pk[data-sa="pick"]').nth(1).click(); await page.wait_for_timeout(350)
@@ -218,7 +218,7 @@ async def main():
         check(set(own) | {"face_pull"} == set(f2) and len(f2) == len(set(f2)) and f2.index("face_pull") >= len(own), f"import merges valid favourites after your own, drops malformed/unknown ids: {f2}")
 
         # 5. ширины и тёмная тема
-        await page.goto(APP + "?tab=plan"); await page.wait_for_timeout(400)
+        await page.goto(APP + "?tab=plan&s=1A"); await page.wait_for_timeout(400)
         await open_add(page); await page.wait_for_timeout(400)
         for w in (360, 375, 412):
             await page.set_viewport_size({"width": w, "height": 800}); await page.wait_for_timeout(150)
@@ -230,7 +230,7 @@ async def main():
         dark = await b.new_context(viewport={"width": 375, "height": 812}, service_workers="block", has_touch=True, color_scheme="dark")
         await dark.add_init_script("try{localStorage.setItem('upg3:noLogin','true'); localStorage.setItem('upg3:favs', JSON.stringify(['hammer_curl','legext']))}catch(e){}")
         dp = await dark.new_page()
-        await dp.goto(APP + "?tab=plan"); await dp.wait_for_timeout(500)
+        await dp.goto(APP + "?tab=plan&s=1A"); await dp.wait_for_timeout(500)
         await dp.click('[data-padd]'); await dp.wait_for_timeout(500)
         await dp.screenshot(path=f"{SH}/wp3_picker_dark.png")
         con = await dp.evaluate("""(() => { const lum = (c) => { const v = c.match(/\\d+(\\.\\d+)?/g).slice(0, 3).map(Number).map(x => { x /= 255; return x <= .03928 ? x / 12.92 : Math.pow((x + .055) / 1.055, 2.4); }); return .2126 * v[0] + .7152 * v[1] + .0722 * v[2]; };

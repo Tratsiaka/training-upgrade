@@ -92,6 +92,7 @@ files = {
     "js/sync.js": (src / "sync.js").read_text(encoding="utf-8"),
     "js/charts.js": (src / "charts.js").read_text(encoding="utf-8"),
     "js/plan.js": (src / "plan.js").read_text(encoding="utf-8"),
+    "js/programs.js": (src / "programs.js").read_text(encoding="utf-8"),
     "js/app.js": (src / "app.js").read_text(encoding="utf-8"),
 }
 lib_json = json.dumps(lib, ensure_ascii=False, separators=(",", ":"))

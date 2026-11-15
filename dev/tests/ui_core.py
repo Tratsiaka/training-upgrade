@@ -15,6 +15,19 @@ async def open_ctl(page):
         await page.click('[data-ctl]'); await page.wait_for_timeout(60)
 
 
+async def to_hub(page):
+    """Хаб «Программы»: нижнее меню, повторное касание «Программы» — к корню вкладки."""
+    for _ in range(3):
+        if await page.locator('.sess-list').count(): return
+        await page.click('.nav-i[data-tab="plan"]'); await page.wait_for_timeout(80)
+
+
+async def open_sched(page):
+    await to_hub(page); await page.click('[data-pv="sched"]'); await page.wait_for_timeout(80)
+    if not await page.locator('select[data-cycgo]').is_visible():  # редкие действия цикла — под «Ещё действия»
+        await page.click('#cycle .cyc-more summary'); await page.wait_for_timeout(60)
+
+
 async def main():
     async with async_playwright() as p:
         b = await p.chromium.launch()
@@ -29,8 +42,7 @@ async def main():
         await page.goto(APP + "?tab=plan"); await page.wait_for_timeout(400)
         problems = []
         for wk in ["1", "2", "5", "6", "9", "10", "11", "15"]:
-            await page.click('.nav-i[data-tab="plan"]'); await page.wait_for_timeout(60)
-            await page.click('[data-ptab="sched"]'); await page.wait_for_timeout(60)
+            await open_sched(page)
             await page.select_option('select[data-cycgo]', wk); await page.wait_for_timeout(60)
             await page.click('.nav-i[data-tab="today"]'); await page.wait_for_timeout(60)
             await open_ctl(page)
@@ -47,13 +59,22 @@ async def main():
             m = bad.findall(await page.locator("#app").inner_text())
             if m: problems.append((tab, m[:5]))
             if tab == "plan":
-                for sub in ["train", "sched", "about"]:
-                    await page.click(f'[data-ptab="{sub}"]'); await page.wait_for_timeout(80)
-                    for blk in (["1", "2", "3"] if sub == "train" else [""]):
-                        for dd in (["A", "B", "C"] if sub == "train" else [""]):
-                            if blk: await page.click(f'[data-pb="{blk}"]'); await page.click(f'[data-pd="{dd}"]'); await page.wait_for_timeout(40)
-                            m = bad.findall(await page.locator("#app").inner_text())
-                            if m: problems.append(("plan", sub, blk, dd, m[:5]))
+                for sub in ["sched", "about", "progs"]:
+                    await to_hub(page); await page.click(f'[data-pv="{sub}"]'); await page.wait_for_timeout(80)
+                    m = bad.findall(await page.locator("#app").inner_text() + await page.locator("#title").inner_text())
+                    if m: problems.append(("plan", sub, m[:5]))
+                visited = []
+                for blk in ["1", "2", "3"]:
+                    for dd in ["A", "B", "C"]:
+                        await to_hub(page); await page.click(f'[data-pb="{blk}"]'); await page.click(f'[data-pd="{dd}"]'); await page.wait_for_timeout(60)
+                        # именно экран тренировки этого блока и дня (а не хаб): адрес ?s=1A и шапка экрана тренировки
+                        here = await page.evaluate("location.search")
+                        if here == f"?tab=plan&s={blk}{dd}" and await page.locator(".psess-h").count(): visited.append(blk + dd)
+                        m = bad.findall(await page.locator("#app").inner_text() + await page.locator("#title").inner_text())
+                        if m: problems.append(("plan", blk, dd, m[:5]))
+                print("workout screens checked:", len(visited), visited)
+                if len(visited) != 9: problems.append(("plan: not every workout screen was opened", visited))
+                await to_hub(page)
         for tab in ["cardio", "body", "food", "science", "settings"]:
             await page.click(f'.menu-i[data-tab="{tab}"]'); await page.wait_for_timeout(80)
             m = bad.findall(await page.locator("#app").inner_text())
@@ -69,9 +90,9 @@ async def main():
         await page.evaluate("(l) => { localStorage.setItem('upg3:logs', JSON.stringify(l)); localStorage.setItem('upg3:cycle', JSON.stringify({idx:0, since:null, hist:[]})); }", logs)
         await page.goto(APP + "?tab=today"); await page.wait_for_timeout(400)
         txt = await page.locator("#app").inner_text()
-        print("suggested day:", await page.locator('.seg button.on[data-day]').inner_text(), "| next-week banner:", "закрыта" in txt, "| sub:", await page.locator("#sub").inner_text())
+        print("suggested day:", await page.locator('.day-seg button.on[data-day]').inner_text(), "| next-week banner:", "закрыта" in txt, "| sub:", " ".join((await page.locator(".hero-sub").inner_text()).replace("\xa0", " ").split()))
         await page.click('button[data-day="C"]'); await page.wait_for_timeout(80)
-        print("C stays in week 1:", "нед. 1 из" in (await page.locator("#sub").inner_text()))  # подзаголовок: «Блок 1 · нед. 1 из 5 · …»
+        print("C stays in week 1:", "неделя 1 из" in (" ".join((await page.locator(".hero-sub").inner_text()).replace("\xa0", " ").split())))  # строка героя: «Апгрейд · блок 1 · неделя 1 из 5»
         await page.click('button[data-day="A"]'); await page.wait_for_timeout(80)
         if not await page.locator('input[data-log][data-f="w"]').first.is_visible():
             await page.locator('button[data-toggle="log"]').first.click()
@@ -80,11 +101,10 @@ async def main():
         cyc = json.loads(await page.evaluate("localStorage.getItem('upg3:cycle')"))
         print("after first set of new week → cycle:", {k: cyc[k] for k in ("idx", "since")}, "| hist:", cyc["hist"][-1])
         await page.reload(); await page.wait_for_timeout(300)
-        print("after reload: day", await page.locator('.seg button.on[data-day]').inner_text().__await__() if False else await page.locator('.seg button.on[data-day]').inner_text(), "| sub:", await page.locator("#sub").inner_text(), "| banner gone:", "закрыта" not in await page.locator("#app").inner_text())
+        print("after reload: day", await page.locator('.day-seg button.on[data-day]').inner_text().__await__() if False else await page.locator('.day-seg button.on[data-day]').inner_text(), "| sub:", " ".join((await page.locator(".hero-sub").inner_text()).replace("\xa0", " ").split()), "| banner gone:", "закрыта" not in await page.locator("#app").inner_text())
 
         # 3) cycle controls + undo
-        await page.click('.nav-i[data-tab="plan"]'); await page.wait_for_timeout(100)
-        await page.click('[data-ptab="sched"]'); await page.wait_for_timeout(100)
+        await open_sched(page); await page.wait_for_timeout(40)
         await page.screenshot(path=f"{SH}/v32_plan.png", full_page=False)
         await page.click('button[data-cyc="deload"]'); await page.wait_for_timeout(100)
         cyc = json.loads(await page.evaluate("localStorage.getItem('upg3:cycle')"))
@@ -92,7 +112,7 @@ async def main():
         await page.click('[data-undo]'); await page.wait_for_timeout(100)
         print("undo → idx", json.loads(await page.evaluate("localStorage.getItem('upg3:cycle')"))["idx"])
         await page.click('button[data-cyc="nextblock"]'); await page.wait_for_timeout(100)
-        print("next block → idx", json.loads(await page.evaluate("localStorage.getItem('upg3:cycle')"))["idx"], "| sub:", await page.locator("#sub").inner_text())
+        print("next block → idx", json.loads(await page.evaluate("localStorage.getItem('upg3:cycle')"))["idx"], "| now:", await page.evaluate("(() => { const c = window.__UPG.ctxNow(); return `блок ${c.block} · неделя ${c.week} из 5`; })()"))  # подзаголовка в шапке больше нет
         await page.select_option('select[data-cycgo]', "2"); await page.wait_for_timeout(100)
 
         # 4) days: Ср (3) → max 3 message; remove Сб; add Чт

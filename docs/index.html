@@ -6,7 +6,7 @@
 <title>Апгрейд — тренировки</title>
 <meta name="description" content="Гибкая программа силовых тренировок v3: 2–3 тренировки в неделю, 60/90/120 минут, журнал и база упражнений.">
 <meta name="robots" content="noindex">
-<meta name="theme-color" content="#f4f5f2">
+<meta name="theme-color" content="#F3F5F8">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
@@ -15,23 +15,22 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Апгрейд">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="css/app.css?v=151f85bb">
+<link rel="stylesheet" href="css/app.css?v=9465c7da">
 </head>
 <body>
 <header class="top">
   <div class="top-in">
-    <button class="back" id="back" hidden aria-label="Назад к разделу «Ещё»">‹ Ещё</button>
-    <div class="logo" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 512 512"><path d="M150 292 L256 186 L362 292" fill="none" stroke="currentColor" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/><path d="M170 370 H342" fill="none" stroke="currentColor" stroke-width="64" stroke-linecap="round" opacity=".55"/></svg></div>
-    <div class="grow"><h1 id="title">Сегодня</h1><div class="sub" id="sub"></div></div>
-    <span class="offline" id="offline" hidden>офлайн</span>
-    <button class="icon-btn sync-ind" id="syncBtn" hidden></button>
+    <div class="grow"><button class="back" id="back" hidden aria-label="Назад к разделу «Ещё»"><svg class="ic" width="18" height="18" aria-hidden="true"><use href="#i-arrow-left"/></svg>Ещё</button><h1 id="title">Сегодня</h1></div>
+    <span class="offline" id="offline" hidden><svg class="ic" width="14" height="14" aria-hidden="true"><use href="#i-cloud-off"/></svg>офлайн</span>
     <button class="icon-btn" id="timerBtn" aria-label="Таймер отдыха" hidden></button>
-    <button class="icon-btn" id="themeBtn" aria-label="Переключить тему"></button>
+    <button class="icon-btn hdr-ren" id="hdrRen" data-pren="1" aria-label="Переименовать тренировку" hidden><svg class="ic" width="20" height="20" aria-hidden="true"><use href="#i-pencil"/></svg></button>
+    <button class="icon-btn" id="hdrMenu" data-pday="1" aria-label="Действия с тренировкой: скопировать, очистить, переименовать, сбросить" hidden><svg class="ic" width="22" height="22" aria-hidden="true"><use href="#i-more-vertical"/></svg></button>
+    <button class="icon-btn sync-ind" id="syncBtn" hidden></button>
   </div>
 </header>
 <main class="wrap" id="app"></main>
 <nav class="nav" aria-label="Разделы"><div class="nav-in" id="nav"></div></nav>
-<div class="tbar" id="tBar" hidden><button class="fab" id="fab" aria-label="Таймер отдыха"></button><button class="tbar-b" id="tPlus" data-plus="1" aria-label="Добавить 15 секунд">+15 с</button><button class="tbar-b" id="tStop" data-stop="" aria-label="Остановить таймер">✕</button></div>
+<div class="tbar" id="tBar" hidden><button class="fab" id="fab" aria-label="Таймер отдыха"></button><button class="tbar-b" id="tPlus" data-plus="1" aria-label="Добавить 15 секунд">+15 с</button><button class="tbar-b" id="tStop" data-stop="" aria-label="Остановить таймер"><svg class="ic" width="20" height="20" aria-hidden="true"><use href="#i-x"/></svg></button></div>
 <div class="timer-panel" id="tPanel" role="dialog" aria-label="Таймер отдыха">
   <div class="timer-big" id="tBig">0:00</div>
   <div class="timer-presets">
@@ -43,12 +42,13 @@
   </div>
 </div>
 <noscript><p style="padding:16px">Для работы программы нужен JavaScript.</p></noscript>
-<script src="js/store.js?v=151f85bb"></script>
-<script src="js/config.js?v=151f85bb"></script>
-<script src="js/program.js?v=151f85bb"></script>
-<script src="js/sync.js?v=151f85bb"></script>
-<script src="js/charts.js?v=151f85bb"></script>
-<script src="js/plan.js?v=151f85bb"></script>
-<script src="js/app.js?v=151f85bb"></script>
+<script src="js/store.js?v=9465c7da"></script>
+<script src="js/config.js?v=9465c7da"></script>
+<script src="js/program.js?v=9465c7da"></script>
+<script src="js/sync.js?v=9465c7da"></script>
+<script src="js/charts.js?v=9465c7da"></script>
+<script src="js/plan.js?v=9465c7da"></script>
+<script src="js/programs.js?v=9465c7da"></script>
+<script src="js/app.js?v=9465c7da"></script>
 </body>
 </html>

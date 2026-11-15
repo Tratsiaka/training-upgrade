@@ -31,7 +31,7 @@ async def fresh(page, logs=None, extra=None, day="A"):
     """Чистый профиль (+ прошлые записи и ключи), открыть «Сегодня» на нужной тренировке."""
     await page.goto(APP + "?tab=today"); await page.wait_for_timeout(150)
     await page.evaluate("ms => sessionStorage.setItem('__now', String(ms))", noon_ms(D))  # часы страницы = выбранная дата, 12:00
-    await page.evaluate("""([l, x]) => { localStorage.clear(); localStorage.setItem('upg3:noLogin','true');
+    await page.evaluate("""([l, x]) => { localStorage.clear(); localStorage.setItem('upg3:noLogin','true'); localStorage.setItem('upg3:loginHintHidden','true');
         if (l) localStorage.setItem('upg3:logs', JSON.stringify(l)); Object.entries(x || {}).forEach(([k, v]) => localStorage.setItem('upg3:' + k, JSON.stringify(v))); }""", [logs, extra])
     await page.reload(); await page.wait_for_timeout(350)
     await page.click(f'button[data-day="{day}"]'); await page.wait_for_timeout(120)
@@ -66,7 +66,9 @@ async def bar_on(page):
 
 
 async def day_mark(page, d="A"):
-    return await page.locator(f'button[data-day="{d}"]').inner_text()
+    """Отметка у чипа тренировки: «сделана» (галочка) или «начата» (кольцо) — словами в aria-label."""
+    b = page.locator(f'button[data-day="{d}"]')
+    return (await b.get_attribute("aria-label") or "") + ("" if not await b.locator(".ok").count() else " [ok]")
 
 
 async def make_cur(page, ex):
@@ -146,12 +148,13 @@ async def main():
         await fresh(page)
         await page.click('[data-step="legpress:0:w:1"]'); await page.fill('input[data-log="legpress"][data-i="0"][data-f="w"]', "60")
         await page.click('[data-step="legpress:0:w:1"]'); await page.wait_for_timeout(100)
-        check(KEY not in await logs(page) and "✓" not in await day_mark(page), f"stepper and typed weight write nothing; day A not ✓: {await logs(page)}")
+        check(KEY not in await logs(page) and not re.search("сделана|начата", await day_mark(page)), f"stepper and typed weight write nothing; day A not marked: {await logs(page)}")
         await tap(page, '[data-done="legpress:0"]')
-        check(await sets(page, "legpress") == [{"w": "62,5", "r": "10"}] and "✓" in await day_mark(page), f"✓ stores the set (62,5 × 10), day A ✓: {await sets(page, 'legpress')}")
+        check(await sets(page, "legpress") == [{"w": "62,5", "r": "10"}] and "начата" in await day_mark(page) and "сделана" not in await day_mark(page) and await page.evaluate("!!window.__UPG.ctxNow().done.A"),
+              f"✓ stores the set (62,5 × 10); chip A shows «начата» (not all exercises yet), the week still counts A: {await sets(page, 'legpress')} {await day_mark(page)}")
         await tap(page, '.ex[data-ex="legpress"] .ex-tap', 150); await tap(page, '.ex[data-ex="legpress"] .sets-sum', 150)
         await tap(page, '[data-done="legpress:0"]')
-        check(KEY not in await logs(page) and "✓" not in await day_mark(page), f"un-log of the only set removes today's entry: {await logs(page)}")
+        check(KEY not in await logs(page) and not re.search("сделана|начата", await day_mark(page)), f"un-log of the only set removes today's entry: {await logs(page)}")
         check(await val(page, "legpress", 0, "w") == "62,5", "un-logged weight stays as a draft")
         await tap(page, '[data-done="legpress:0"]')
         await tap(page, '.ex[data-ex="legpress"] .ex-tap', 150); await tap(page, '.ex[data-ex="legpress"] .sets-sum', 150)
@@ -181,7 +184,7 @@ async def main():
         await page.evaluate("window.Store.applyRemote({goals: {}})")  # синхронизация во время ввода
         await page.locator("h2").first.click(); await page.wait_for_timeout(250)
         check((await sets(page, "legpress"))[:1] == [{"w": "41,25", "r": "9"}], f"typing reps keeps prefilled weight: {await sets(page, 'legpress')}")
-        check("1/" in await page.inner_text(".prog-t") and await page.locator('.ex[data-ex="legpress"] .ex-st').inner_text() == "1/3", "after blur the typed set shows as done (1/3), progress updated")
+        check(await page.get_attribute(".prog", "aria-valuenow") == "1" and await page.locator('.ex[data-ex="legpress"] .ex-st').inner_text() == "1/3", "after blur the typed set shows as done (1/3), progress updated")
         if await page.locator('.ex[data-ex="legpress"].lite').count(): await tap(page, '.ex[data-ex="legpress"] .ex-tap', 150)
         check("41,25×9" in await page.locator('.ex[data-ex="legpress"] .sets-sum').inner_text(), "typed set is in the done line")
         await tap(page, '.ex[data-ex="legpress"] .sets-sum', 150)
@@ -229,7 +232,7 @@ async def main():
 
         # 6. первая запись: вес у жима спрашивается один раз за день; у упражнений без веса — никогда
         await fresh(page)
-        check(await page.get_attribute('input[data-log="deadbug"][data-i="0"][data-f="w"]', "placeholder") == "+кг", "bodyweight item: weight is optional «+кг»")
+        check(await page.get_attribute('input[data-log="deadbug"][data-i="0"][data-f="w"]', "placeholder") == "доп. кг" and (await page.get_attribute('input[data-log="deadbug"][data-i="0"][data-f="w"]', "aria-label")).startswith("Доп. вес"), "bodyweight item: weight is optional («доп. кг», «Доп. вес»)")
         await tap(page, '[data-done="legpress:0"]')
         check(await page.evaluate("document.activeElement.dataset.f") == "w" and not await sets(page, "legpress"), "first-ever weighted lift: ✓ with empty kg asks for weight first")
         await tap(page, '[data-done="legpress:0"]'); await tap(page, '[data-done="deadbug:0"]')
@@ -243,7 +246,9 @@ async def main():
         await fresh(page, None, {"time": 120}, day="B")
         fh = 'input[data-log="farmer_hold"][data-i="0"][data-f="w"]'
         await tap(page, '.ex[data-ex="farmer_hold"] .ex-tap', 150)
-        check(await page.get_attribute(fh, "placeholder") == "кг", "loaded hold (farmer, dumbbells): main weight «кг»")
+        head = await page.inner_text('.ex[data-ex="farmer_hold"] .log-head')
+        # подпись над полями — «Вес, кг» (основной вес, не «Доп. вес»); плейсхолдер под подписью пустой, чтобы не дублировать её
+        check("Вес, кг" in head and "Доп." not in head and await page.get_attribute(fh, "placeholder") == "", f"loaded hold (farmer, dumbbells): main weight label «Вес, кг», no duplicate placeholder: {head!r}")
         await page.click('[data-step="farmer_hold:0:w:1"]')
         check(await page.input_value(fh) == "20", f"loaded hold: first + → 20: {await page.input_value(fh)}")
         # майо: подставляется цель — первое число, а не прошлая запись целиком
@@ -347,6 +352,7 @@ async def main():
 
         # 12. цели касания ≥ 44 px
         await fresh(page, past_log({"legpress": LP}))
+        await page.evaluate("localStorage.setItem('upg3:loginHintHidden', 'false')"); await page.reload(); await page.wait_for_timeout(350)  # плашка «Войти» тоже меряется
         await page.click('#timerBtn'); await page.wait_for_timeout(100)
         await page.click('#tPanel [data-t="60"]'); await page.wait_for_timeout(100)
         hs = await page.evaluate("""() => { const q = (s) => [...document.querySelectorAll(s)].filter(e => e.getClientRects().length).map(e => Math.round(e.getBoundingClientRect().height));
@@ -404,7 +410,7 @@ async def main():
         await page.click('#tBar [data-stop]'); await page.wait_for_timeout(100)
         # 16. «0» повторов — не подход: день не отмечен, неделя не закрывается
         await fresh(page, {f"{today}_A": {"day": "A", "block": 1, "week": 1, "idx": 0, "ex": {"legpress": [{"w": "40", "r": "0"}]}}})
-        check("✓" not in await day_mark(page, "A") and not await page.evaluate("window.__UPG.ctxNow().done.A"), "reps «0» do not count as a set")
+        check(not re.search("сделана|начата", await day_mark(page, "A")) and not await page.evaluate("window.__UPG.ctxNow().done.A"), "reps «0» do not count as a set")
         # 17. записанное сегодня, но не видное в карточках: замена на сегодня и связка, скрытая режимом времени
         hidden = await page.evaluate("(() => { const g = window.PROGRAM.sessions['1A'].groups.find(g => g.items && g.tier && g.tier !== 'core' && ['pair','tri','single'].includes(g.kind)); return g ? g.items[0].ex : ''; })()")
         lg = {f"{today}_A": {"day": "A", "block": 1, "week": 1, "idx": 0, "ex": {"legpress": [{"w": "40", "r": "10"}], hidden: [{"w": "10", "r": "12"}]}}}

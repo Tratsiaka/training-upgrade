@@ -200,12 +200,23 @@
     cycle: { kind: "whole" },
     adjust: { kind: "whole" },
     plan: { kind: "whole" },
+    progs: { kind: "map", prefix: "prog:", id: /^p[0-9a-z]{8}$/ },
+    progPos: { kind: "map", prefix: "pos:", id: /^p[0-9a-z]{8}$/ },
+    curprog: { kind: "whole" },
     logs: { kind: "map", prefix: "log:" },
     meas: { kind: "list", prefix: "meas:", id: (m) => (m && m.date ? String(m.date) : "") }
   };
+  const BAD_ID = { __proto__: null, ["__proto__"]: 1, prototype: 1, constructor: 1 };
+  /* Версия набора ключей. Старая сборка пропускала строки prog:*, pos:*, curprog (не знала их), а курсор уходил дальше —
+     после обновления она бы их не получила. При первом запуске новой версии курсор сбрасывается один раз: сервер отдаёт всё
+     заново, applyRows пропускает строки с тем же содержимым и не трогает более новые локальные правки (они в очереди). */
+  const SPEC_V = 2;
+  if (+sys.get("specv", 0) < SPEC_V) { sys.set("cursor", "0"); sys.set("specv", SPEC_V); }
   function storeKeyOf(rk) {
     if (rk.indexOf("log:") === 0) return "logs";
     if (rk.indexOf("meas:") === 0) return "meas";
+    if (rk.indexOf("prog:") === 0) return "progs";
+    if (rk.indexOf("pos:") === 0) return "progPos";
     return SPEC[rk] && SPEC[rk].kind === "whole" ? rk : null;
   }
   function shardsOf(sk, value) {
@@ -252,7 +263,7 @@
       const sh = shardsOf(sk, S.get(sk));
       Object.keys(sh).forEach((rk) => { known[rk] = { h: hash(JSON.stringify(sh[rk])), u: BOOT_TIME }; pending[rk] = 1; });
     });
-    sys.set("known", known); sys.set("pending", pending); sys.set("cursor", "0");
+    sys.set("known", known); sys.set("pending", pending); sys.set("cursor", "0"); sys.set("specv", SPEC_V);
   }
 
   /* ---------- применение данных с сервера ---------- */
@@ -282,7 +293,12 @@
       cur = cur === undefined ? (sp.kind === "list" ? [] : sp.kind === "map" ? {} : undefined) : JSON.parse(JSON.stringify(cur));
       byStore[sk].forEach((r) => {
         if (sp.kind === "whole") { if (!r.d) cur = r.v; }
-        else if (sp.kind === "map") { const id = r.k.slice(sp.prefix.length); if (r.d) delete cur[id]; else cur[id] = r.v; }
+        else if (sp.kind === "map") {
+          // ключи из базы — не имена свойств прототипа и (у программ) только вида p + 8 знаков
+          const id = r.k.slice(sp.prefix.length);
+          if (BAD_ID[id] || (sp.id && !sp.id.test(id))) return;
+          if (r.d) delete cur[id]; else cur[id] = r.v;
+        }
         else { const id = r.k.slice(sp.prefix.length); cur = cur.filter((x) => sp.id(x) !== id); if (!r.d) cur.push(r.v); }
       });
       if (cur !== undefined) updates[sk] = cur;

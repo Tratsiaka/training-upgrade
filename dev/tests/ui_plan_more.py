@@ -17,7 +17,7 @@ async def main():
         await page.keyboard.press("Escape"); await page.wait_for_timeout(300)
         # Изменить → plan B
         await page.click('[data-planedit]'); await page.wait_for_timeout(300)
-        print("planedit →", await page.locator('[data-pd].on').get_attribute("data-pd"), await page.locator('[data-pb].on').get_attribute("data-pb"), "| ptab:", await page.locator('[data-ptab].on').get_attribute("data-ptab"))
+        print("planedit →", await page.locator('.psess-h .day-tile').inner_text(), await page.locator('[data-pb].on').get_attribute("data-pb"), "| back to:", (await page.locator('#back').inner_text()).strip())
         # library add
         await page.goto(APP + "?tab=library"); await page.wait_for_timeout(900)
         await page.fill("[data-libq]", "тяга т-грифа"); await page.wait_for_timeout(400)

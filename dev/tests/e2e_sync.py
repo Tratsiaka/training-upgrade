@@ -89,7 +89,8 @@ async def main():
         print("A sees B's measurement:", "88,4" in await A.locator("#app").inner_text())
         # cycle + adjustments sync from A to B
         await A.goto(APP + "?tab=plan"); await A.wait_for_timeout(300)
-        await A.click('[data-ptab="sched"]'); await A.wait_for_timeout(150)
+        await A.click('[data-pv="sched"]'); await A.wait_for_timeout(150)  # хаб → «Расписание и цикл»
+        await A.click('#cycle .cyc-more summary'); await A.wait_for_timeout(100)  # «Разгрузка сейчас» — под «Ещё действия»
         await A.click('button[data-cyc="deload"]'); await A.wait_for_timeout(300)
         await A.evaluate("window.Store.set('adjust', [{id:'t1', title:'Тест', enabled:true, changes:[{exercise:'bench', session:'*', sets:2}]}])")
         # правка программы на A: замена в 1A и упражнение из базы в 2B
@@ -100,10 +101,71 @@ async def main():
         print("B got cycle idx:", await B.evaluate("(window.Store.get('cycle')||{}).idx"), "| B got adjust:", await B.evaluate("(window.Store.get('adjust')||[]).length"))
         print("B got plan edit:", await B.evaluate("window.__UPG.sessOf('1A').groups[1].items[0].ex"), "| B custom:", await B.evaluate("(window.PROGRAM.exercises['ds_0095']||{}).n"),
               "| B 2B last:", await B.evaluate("(() => { const g = window.__UPG.sessOf('2B').groups.filter(g => g.items && g.kind !== 'warmup'); return g[g.length-1].items[0].ex; })()"))
-        await B.goto(APP + "?tab=plan"); await B.wait_for_timeout(600)
+        await B.goto(APP + "?tab=plan&s=1A"); await B.wait_for_timeout(600)
         print("B plan shows edit:", "Гакк-присед" in await B.locator("#app").inner_text())
         print("server plan key:", [r["key"] for r in sql("select key from app.kv where key = 'plan'")])
         await A.evaluate("window.__UPG.PM.revert('1A', 1, 0, '')"); await A.wait_for_timeout(300)
+
+        # несколько программ: создание, текущая программа, правка тренировки своей программы, удаление — между устройствами
+        pid = await A.evaluate("window.__UPG.createProgram({ kind: 'tpl', tpl: 'fullbody3', name: 'Синк-тест' }).id")
+        await A.wait_for_timeout(3500)
+        print("server has prog key:", [r["key"] for r in sql(f"select key from app.kv where key = 'prog:{pid}' and not deleted")] == [f"prog:{pid}"])
+        await B.evaluate("window.Sync.syncNow()"); await B.wait_for_timeout(1500)
+        print("B got programme created on A:", await B.evaluate(f"(window.__UPG.progsAll()['{pid}'] || {{}}).name") == "Синк-тест")
+        await A.evaluate(f"window.__UPG.switchProgram('{pid}'); window.__UPG.render()"); await A.wait_for_timeout(3500)
+        await B.evaluate("window.Sync.syncNow()"); await B.wait_for_timeout(1500)
+        await B.goto(APP + "?tab=plan"); await B.wait_for_timeout(800)
+        print("B shows the same current programme:", await B.evaluate("window.__UPG.curId()") == pid, "| B hub hero:", await B.locator(".hero.ph h2").inner_text(),
+              "| server curprog:", [r["value"] for r in sql("select value from app.kv where key = 'curprog'")] == [{"id": pid}],
+              "| settings untouched by the switch:", "prog" not in json.dumps(sql("select value from app.kv where key = 'settings'")))
+        # устройство синхронизировалось на старой сборке после появления prog:*/pos:*/curprog: строки пропущены, курсор впереди,
+        # specv нет — после обновления курсор сбрасывается один раз и программы приходят
+        await B.evaluate("""(() => { const k = JSON.parse(localStorage.getItem('upg3~known') || '{}'); Object.keys(k).forEach((x) => { if (/^(prog:|pos:|curprog)/.test(x)) delete k[x]; });
+            localStorage.setItem('upg3~known', JSON.stringify(k)); ['progs', 'progPos', 'curprog'].forEach((x) => localStorage.removeItem('upg3:' + x)); localStorage.removeItem('upg3~specv'); })()""")
+        cur_before = await B.evaluate("localStorage.getItem('upg3~cursor')")
+        logs_before = await B.evaluate("Object.keys(window.Store.get('logs', {})).length")
+        await B.goto(APP + "?tab=plan"); await B.wait_for_timeout(2500)
+        print("old-build device (cursor", cur_before, "ahead, no specv) gets programmes after the update:", await B.evaluate(f"!!(window.Store.get('progs') || {{}})['{pid}']"),
+              "| current again:", await B.evaluate("window.__UPG.curId()") == pid, "| specv set:", await B.evaluate("localStorage.getItem('upg3~specv')"),
+              "| local journal intact:", await B.evaluate("Object.keys(window.Store.get('logs', {})).length") == logs_before)
+        # место своей программы — pos:<id>; cycle остаётся местом «Апгрейда»
+        await A.evaluate("window.__UPG.planGo('sched')"); await A.click('[data-cyc="next"]'); await A.wait_for_timeout(3500)
+        await B.evaluate("window.Sync.syncNow()"); await B.wait_for_timeout(1500)
+        print("server has pos key:", [r["value"]["idx"] for r in sql(f"select value from app.kv where key = 'pos:{pid}'")] == [1],
+              "| B week of the programme:", await B.evaluate(f"(window.Store.get('progPos') || {{}})['{pid}'].idx") == 1, "| B cycle (built-in) unchanged:", await B.evaluate("(window.Store.get('cycle') || {}).idx"))
+        await A.evaluate("window.__UPG.PM.setParams('1A', 0, 0, '', { sets: 5 })"); await A.wait_for_timeout(3500)
+        await B.evaluate("window.Sync.syncNow()"); await B.wait_for_timeout(1500)
+        print("B got the custom workout edit (5 sets):", await B.evaluate("window.__UPG.sessOf('1A').groups[0].items[0].sets") == 5, "| B workout screen:",
+              await B.evaluate("window.__UPG.planGo('sess', { b: 1, d: 'A' }), document.querySelector('.pcs .pc b').textContent"))
+        await A.evaluate("window.__UPG.switchProgram('main'); window.__UPG.render()"); await A.wait_for_timeout(300)
+        await A.evaluate(f"window.__UPG.deleteProgram('{pid}')"); await A.wait_for_timeout(3500)
+        print("server marks prog deleted:", [r["deleted"] for r in sql(f"select deleted from app.kv where key = 'prog:{pid}'")] == [True],
+              "| and its pos:", [r["deleted"] for r in sql(f"select deleted from app.kv where key = 'pos:{pid}'")] == [True])
+        await B.evaluate("window.Sync.syncNow()"); await B.wait_for_timeout(1500)
+        print("B: deletion arrived, back on «Апгрейд»:", await B.evaluate(f"!window.__UPG.progsAll()['{pid}']") and await B.evaluate("window.__UPG.curId()") == "main",
+              "| B week of «Апгрейд» kept:", await B.evaluate("(window.Store.get('cycle') || {}).idx"))
+        # одна буква в один день в двух программах: две записи, обе доезжают и не смешиваются
+        p3 = await A.evaluate("(() => { const id = window.__UPG.createProgram({ kind: 'tpl', tpl: 'fullbody3', name: 'Буквы' }).id; window.__UPG.switchProgram(id); window.__UPG.render(); return id; })()")
+        await A.evaluate("window.__UPG.planGo('hub')"); await A.click('.nav-i[data-tab="today"]'); await A.wait_for_timeout(300)
+        await A.click('button[data-day="A"]'); await A.wait_for_timeout(200)
+        await A.locator('input[data-log][data-f="w"]').first.fill("30"); await A.locator('input[data-log][data-f="r"]').first.fill("12"); await A.locator("h3").first.click()
+        await A.wait_for_timeout(3500)
+        keys = [r["key"] for r in sql("select key from app.kv where key like 'log:%' and not deleted order by key")]
+        print("server log keys (built-in A and custom A@id same day):", [k for k in keys if k.endswith("_A") or ("_A@" + p3) in k])
+        await B.evaluate("window.Sync.syncNow()"); await B.wait_for_timeout(1500)
+        print("B has both entries:", await B.evaluate(f"Object.keys(window.Store.get('logs')).filter(k => k.endsWith('_A') || k.endsWith('_A@{p3}')).length") >= 2)
+        await A.evaluate("window.__UPG.switchProgram('main'); window.__UPG.render()"); await A.wait_for_timeout(300)
+        await A.evaluate(f"window.__UPG.deleteProgram('{p3}')"); await A.wait_for_timeout(3000)
+        # запись текущей программы пропала на сервере (гонка двух устройств) — тихо на «Апгрейд» с тостом
+        p2 = await A.evaluate("(() => { const id = window.__UPG.createProgram({ kind: 'blank', n: 2, name: 'Пропадёт' }).id; window.__UPG.switchProgram(id); window.__UPG.render(); return id; })()")
+        await A.wait_for_timeout(3500); await B.evaluate("window.Sync.syncNow()"); await B.wait_for_timeout(1500)
+        on_p2 = await B.evaluate("window.__UPG.curId()") == p2
+        sql(f"update app.kv set deleted = true, value = null, updated_at = now(), rev = nextval('app.kv_rev') where key = 'prog:{p2}'")
+        await B.evaluate("window.Sync.syncNow()"); await B.wait_for_timeout(1500)
+        print("B was on the vanished programme:", on_p2, "| B → «Апгрейд»:", await B.evaluate("window.__UPG.curId()") == "main", "| toast:", await B.evaluate("document.getElementById('toastT').textContent"))
+        await A.evaluate("window.Sync.syncNow()"); await A.wait_for_timeout(1500)
+        print("A also back on «Апгрейд»:", await A.evaluate("window.__UPG.curId()") == "main")
+        await B.evaluate("window.Sync.syncNow()"); await B.wait_for_timeout(1000)
 
         # offline queue on A
         await ctxA.set_offline(True)

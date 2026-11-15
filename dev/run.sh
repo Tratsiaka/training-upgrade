@@ -40,7 +40,8 @@ down() {
 run() { echo "== $1"; (cd "$DEV/tests" && "${@:2}"); }
 ui() {
   run "модель плана" node plan_model_test.cjs
-  for t in ui_core ui_today ui_agents ui_journal ui_library_names ui_plan ui_plan_more ui_plan_unit ui_plan_drag ui_plan_compose ui_picker; do run "$t" python3 "$t.py"; done
+  run "модель программ" node programs_test.cjs
+  for t in ui_design ui_core ui_today ui_agents ui_journal ui_library_names ui_program ui_programs ui_plan ui_plan_more ui_plan_unit ui_plan_drag ui_plan_compose ui_picker; do run "$t" python3 "$t.py"; done
 }
 # Каждый тест синхронизации ждёт чистую базу — перед ним стенд перезапускается.
 restack() {

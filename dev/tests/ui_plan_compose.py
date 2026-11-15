@@ -22,9 +22,17 @@ async def sheet_open(page):
     return await page.evaluate("!document.getElementById('sheet').hidden && document.getElementById('sheet').classList.contains('open')")
 async def close_sheet(page):
     await page.click('#sheet .sheet-h [data-sa="close"]'); await page.wait_for_timeout(350)
+async def to_hub(page):
+    """Хаб «Программы»: нижнее меню; повторное касание «Программы» — к корню вкладки."""
+    for _ in range(3):
+        if await page.locator('.sess-list').count(): return
+        await page.click('.nav-i[data-tab="plan"]'); await page.wait_for_timeout(150)
 async def pick(page, b, d):
+    await to_hub(page)
     await page.click(f'[data-pb="{b}"]'); await page.click(f'[data-pd="{d}"]'); await page.wait_for_timeout(150)
-async def fresh(page, extra=None, logs=None, tab="plan"):
+async def rerender(page):
+    await page.evaluate("window.__UPG.render()"); await page.wait_for_timeout(100)
+async def fresh(page, extra=None, logs=None, tab="plan&s=1A"):
     await page.goto(APP + "?tab=" + tab); await page.wait_for_timeout(150)
     await page.evaluate("""([x, l]) => { localStorage.clear(); localStorage.setItem('upg3:noLogin','true');
         if (l) localStorage.setItem('upg3:logs', JSON.stringify(l));
@@ -91,7 +99,7 @@ async def main():
         check(await page.locator(".qe-box").count() == 0, "Escape closes editor")
         # свободный текст: ввёл и сразу нажал — значение сохранено и нажатие сработало
         await page.evaluate("window.__UPG.PM.setParams('1A', 1, 1, '', { reps: '6 на сторону' })")
-        await page.click('[data-pd="B"]'); await page.click('[data-pd="A"]'); await page.wait_for_timeout(100)
+        await rerender(page)
         await page.click('[data-qopen="1:1"]'); await page.wait_for_timeout(120)
         check(await page.locator('.qe-box #qeReps').count() == 1 and await page.input_value('#qeReps') == "6 на сторону" and await page.locator('.qe-box [data-qb="a+"]').count() == 0, "free-text reps → text field, no steppers")
         await page.fill('#qeReps', ""); await page.type('#qeReps', "8 на сторону")
@@ -126,10 +134,10 @@ async def main():
         # редактор у нижнего края — прокручивается над нижним меню
         await pick(page, 1, "A")
         await page.evaluate("window.scrollTo(0, 0)"); await page.wait_for_timeout(100)
-        last = await page.evaluate("(() => { const nav = document.querySelector('.nav').getBoundingClientRect().top; const qs = Array.from(document.querySelectorAll('.pr-q')).filter(q => q.getBoundingClientRect().bottom < nav); return qs[qs.length - 1].dataset.qopen; })()")
+        last = await page.evaluate("(() => { const nav = Math.min(document.querySelector('.nav').getBoundingClientRect().top, document.querySelector('.plan-acts').getBoundingClientRect().top); const qs = Array.from(document.querySelectorAll('.pr-q')).filter(q => q.getBoundingClientRect().bottom < nav); return qs[qs.length - 1].dataset.qopen; })()")
         await page.click(f'[data-qopen="{last}"]'); await page.wait_for_timeout(700)
-        pos = await page.evaluate("(() => ({ box: Math.round(document.querySelector('.qe-box').getBoundingClientRect().bottom), nav: Math.round(document.querySelector('.nav').getBoundingClientRect().top) }))()")
-        check(pos["box"] <= pos["nav"], f"editor opened near the bottom scrolls above the nav: {pos}")
+        pos = await page.evaluate("(() => ({ box: Math.round(document.querySelector('.qe-box').getBoundingClientRect().bottom), nav: Math.round(document.querySelector('.nav').getBoundingClientRect().top), bar: Math.round(document.querySelector('.plan-acts').getBoundingClientRect().top) }))()")
+        check(pos["box"] <= pos["nav"] and pos["box"] <= pos["bar"] + 1, f"editor opened near the bottom scrolls above the nav and the sticky add bar: {pos}")
         await page.keyboard.press("Escape")
 
         # 2. редактор держится за упражнение: изменение плана снаружи закрывает его, правок чужого упражнения нет
@@ -144,7 +152,7 @@ async def main():
         # отмена в редакторе — только своего упражнения, чужую правку не трогает
         await fresh(page)
         await page.evaluate("window.__UPG.PM.setParams('1A', 1, 1, '', { sets: 5 })")
-        await page.click('[data-pd="B"]'); await page.click('[data-pd="A"]'); await page.wait_for_timeout(100)
+        await rerender(page)
         await page.click('[data-qopen="1:0"]'); await page.click('.qe-box [data-qb="s+"]'); await page.wait_for_timeout(120)
         await page.click('.qe-box [data-qundo]'); await page.wait_for_timeout(150)
         check((await item(page, "1A", 1, 0))["sets"] == 3 and (await item(page, "1A", 1, 1))["sets"] == 5, "item-scoped undo keeps the other exercise's edit")
@@ -157,7 +165,7 @@ async def main():
         # 3. шторка упражнения: худший случай (варианты + «Вернуть» + корректировка агента)
         await fresh(page, extra={"adjust": [{"id": "t1", "title": "Плечо", "enabled": True, "changes": [{"exercise": "machine_press", "sets": 2}]}]})
         await page.evaluate("window.__UPG.PM.replace('1A', 2, 0, '', 'machine_press', false)")
-        await page.click('[data-pd="B"]'); await page.click('[data-pd="A"]'); await page.wait_for_timeout(100)
+        await rerender(page)
         await page.click('.pr-open[data-pi="2:0"]'); await page.wait_for_timeout(400)
         parts = await page.evaluate("[!!document.querySelector('#sheet .sh-var'), !!document.querySelector('#sheet [data-sa=revert]'), !!document.querySelector('#sheet .sh-adj')]")
         f = await sheet_fit(page)
@@ -180,10 +188,11 @@ async def main():
         await page.click('.pr-open[data-pi="1:0"]'); await page.wait_for_timeout(350)
         check(await page.locator('#sheet .sh-more').get_attribute("open") is None, "«Ещё» collapsed by default")
         await page.click('#sheet .sh-more summary'); await page.wait_for_timeout(120)
-        await page.click('#sheet [data-qb="s+"]'); await page.wait_for_timeout(150)
+        await page.fill('#shTempo', "3 с вниз"); await page.press('#shTempo', "Enter"); await page.wait_for_timeout(150)
+        await page.click('#sheet [data-sa="move"][data-v="1"]'); await page.wait_for_timeout(150)
         check(await page.locator('#sheet .sh-more').get_attribute("open") is not None, "«Ещё» stays open after a change while sheet is open")
         acts = await page.evaluate("Array.from(document.querySelectorAll('#sheet [data-sa]')).map(x => x.dataset.sa)")
-        check(all(a in acts for a in ["replace", "sets", "reps", "rir", "move", "swapwith", "togroup", "remove"]), "sheet keeps actions: " + ",".join(sorted(set(acts))))
+        check(all(a in acts for a in ["replace", "params", "move", "swapwith", "togroup", "remove"]) and not any(a in acts for a in ["sets", "reps", "rir"]), "sheet keeps actions (params — via the inline editor): " + ",".join(sorted(set(acts))))
         await close_sheet(page)
 
         # 4. копирование: только силовая часть, у получателя свои разминка/интервалы/финиш
@@ -202,17 +211,17 @@ async def main():
         await page.screenshot(path=f"{SH}/wp2r_copy.png")
         await page.click('#sheet [data-sa="cdo"]'); await page.wait_for_timeout(350)
         t = await page.locator('.p-undo').inner_text() if await page.locator('.p-undo').count() else ""
-        check(t.startswith("Скопировано: A, блок 1 → C, блок 1; A, блок 2; A, блок 3") and await toast_text(page) == "", "copy: undo banner (no toast on top): " + t)
+        check(t.startswith("Скопировано: тренировка A, блок 1 → тренировка C, блок 1; тренировка A, блок 2; тренировка A, блок 3") and await toast_text(page) == "", "copy: undo banner (no toast on top): " + t)
         check(await exlist(page, "2A") == src and await exlist(page, "1C") == src, "strength part equals source")
         check(await kinds(page, "1C") == "n4x4,pair,pair,tri,pair,pair,pair,skill", "A → C keeps C's intervals and skill: " + await kinds(page, "1C"))
         check(json.dumps(await page.evaluate("window.__UPG.sessOf('2A').groups[0]")) == warm2A, "A1 → A2 keeps block 2's own warm-up")
         await pick(page, 2, "A")
-        tags = await page.evaluate("Array.from(document.querySelectorAll('.prow')).slice(0, 2).map(r => Array.from(r.querySelectorAll('.tag')).map(t => t.textContent).join('+'))")
+        tags = await page.evaluate("Array.from(document.querySelectorAll('.prow')).slice(0, 2).map(r => Array.from(r.querySelectorAll('.pr-open .tag')).map(t => t.textContent).join('+'))")
         check(tags == ["изменено", "добавлено"], f"2A markers: legpress (other scheme) изменено, deadbug (not in 2A) добавлено: {tags}")
         await pick(page, 3, "A")
         tags3 = await page.evaluate("""(() => { const base = new Set(); window.PROGRAM.sessions['3A'].groups.forEach(g => (g.items || []).forEach(it => (it.weekAlt ? it.weekAlt.map(w => w.ex) : [it.ex]).forEach(x => base.add(x))));
             const s = window.__UPG.sessOf('3A'); const rows = Array.from(document.querySelectorAll('.prow'));
-            let k = 0, bad = []; s.groups.forEach(g => { if (!['pair','tri','circuit','single','giant'].includes(g.kind)) return; g.items.forEach(it => { const tags = Array.from(rows[k++].querySelectorAll('.tag')).map(t => t.textContent);
+            let k = 0, bad = []; s.groups.forEach(g => { if (!['pair','tri','circuit','single','giant'].includes(g.kind)) return; g.items.forEach(it => { const tags = Array.from(rows[k++].querySelectorAll('.pr-open .tag')).map(t => t.textContent);
               const ok = base.has(it.ex) ? !tags.includes('добавлено') && (tags.includes('изменено') || !it.chg) : tags.includes('добавлено'); if (!ok) bad.push(it.ex + ':' + tags.join('+')); }); });
             return { n: k, bad }; })()""")
         check(tags3["n"] == 13 and not tags3["bad"], f"3A markers: not in 3A program → добавлено, in it → never добавлено (изменено when params differ): {tags3}")
@@ -249,7 +258,7 @@ async def main():
         await page.click('[data-pday]'); await page.wait_for_timeout(300)
         await page.click('#sheet [data-sa="dcopy"]'); await page.click('#sheet [data-sa="cto"][data-v="1A"]'); await page.wait_for_timeout(150)
         warn = await page.text_content('#sheet .cp-warn'); btn = await page.text_content('#sheet [data-sa="cdo"]')
-        check("Сегодня по A, блок 1 уже записано 2 подхода" in warn and btn.startswith("Всё равно скопировать"), f"copy over today's logged workout warns: {warn} | {btn}")
+        check("Сегодня по тренировке A, блок 1 уже записано 2 подхода" in warn and btn.startswith("Всё равно скопировать"), f"copy over today's logged workout warns: {warn} | {btn}")
         await page.click('#sheet [data-sa="cdo"]'); await page.wait_for_timeout(300)
         await page.click('.nav [data-tab="today"]'); await page.wait_for_timeout(300)
         await page.click('button[data-day="A"]'); await page.wait_for_timeout(200)
@@ -283,7 +292,7 @@ async def main():
         check(await page.locator(".t-empty [data-planedit]").count() == 1 and await page.locator(".group .ex[data-ex]").count() == 0 and not errs, "Today: empty-state card with a button to «План»")
         await page.screenshot(path=f"{SH}/wp2r_today_empty.png")
         await page.click(".t-empty [data-planedit]"); await page.wait_for_timeout(300)
-        check(await page.locator('[data-pd].on').get_attribute("data-pd") == "B" and await page.locator(".pempty").count() == 1, "card opens «План» on that block/day")
+        check(await page.locator(".psess-h .day-tile").inner_text() == "B" and await page.locator('.ps-blk [data-pb="1"].on').count() == 1 and await page.locator(".pempty").count() == 1, "card opens the workout screen of that block/day")
 
         # 7. собрать с нуля: поиск в фокусе сразу, «ещё», свой вариант повторов, связка
         await page.click('.pempty [data-padd]'); await page.wait_for_timeout(350)
@@ -293,7 +302,7 @@ async def main():
             await page.locator('#sheet [data-sa="addpick"]').nth(i * 3).click(); await page.wait_for_timeout(250)
             names.append((await page.text_content("#sheetTitle"))[len("Добавить «"):-1])
             if i == 1:
-                await page.click('#sheet .sh-own summary'); await page.fill('#shARepsT', ""); await page.type('#shARepsT', "8 на сторону")
+                await page.click('#sheet .sh-add-more summary'); await page.fill('#shARepsT', ""); await page.type('#shARepsT', "8 на сторону")
             if i < 2:
                 await page.click('#sheet [data-sa="addmore"]'); await page.wait_for_timeout(300)
                 focus = await page.evaluate("document.activeElement && document.activeElement.matches('#sheet [data-sq]') && document.activeElement.value === ''")
@@ -305,7 +314,7 @@ async def main():
         await page.click('.pr-open[data-pi="2:0"]'); await page.wait_for_timeout(300)
         await page.click('#sheet .sh-more summary'); await page.click('#sheet [data-sa="togroup"][data-v="1"]'); await page.wait_for_timeout(200)
         await close_sheet(page)
-        check(await kinds(page, "1B") == "warmup,pair,single,sprint,z2" and (await exlist(page, "1B"))[0].count(",") == 1, "superset composed via «В связку A»: " + await kinds(page, "1B"))
+        check(await kinds(page, "1B") == "warmup,pair,single,sprint,z2" and (await exlist(page, "1B"))[0].count(",") == 1, "superset composed via «в суперсет с …»: " + await kinds(page, "1B"))
 
         # 8. переименование: только название — не «изменено»; ввёл и сразу нажал кнопку
         await pick(page, 1, "C")
@@ -314,23 +323,29 @@ async def main():
         await page.click('#sheet [data-sa="dcopy"]'); await page.wait_for_timeout(300)
         check((await page.text_content("#sheetTitle")) == "Скопировать тренировку" and await page.evaluate("window.__UPG.sessOf('1C').title") == "Руки и мотор", "type title then tap «Скопировать в…»: saved AND opened")
         await close_sheet(page)
-        h2 = await page.text_content(".psess-h h2")
+        h2 = (await page.text_content("#title")).strip()  # название — один раз, в шапке
         stored = await page.evaluate("JSON.parse(localStorage.getItem('upg3:plan')).s['1C']")
-        check(h2 == "C · Руки и мотор" and not await edited(page, "1C") and stored.get("t") == "Руки и мотор" and stored.get("to") and isinstance(stored.get("g"), list), "rename only: title stored with groups, not reported as edited")
-        check(await page.locator('[data-pd="C"] i.ed').count() == 0 and await page.locator(".psess-h ~ .banner").count() == 0, "no edited dot/«Твоя версия» on the renamed day")
+        check(h2 == "Руки и мотор" and await page.text_content(".psess-h .day-tile") == "C" and not await edited(page, "1C") and stored.get("t") == "Руки и мотор" and stored.get("to") and isinstance(stored.get("g"), list), "rename only: title stored with groups, not reported as edited")
+        check(await page.locator('.ps-blk [data-pb="1"] .ed').count() == 0 and "твоя версия" not in (await page.text_content(".psess-h")).lower(), "no edited dot/«Твоя версия» on the renamed day")
+        await to_hub(page)
+        check(await page.locator('[data-pd="C"] .tag.mine').count() == 0 and "Руки и мотор" in await page.text_content('[data-pd="C"]'), "hub card: new title, no «изменена» for a rename")
         await page.evaluate("window.__UPG.PM.setTitle('3C', 'Только имя')"); await pick(page, 3, "C")
-        check(await page.locator('[data-pb="3"] i.ed').count() == 0 and await page.locator('[data-pd="C"] i.ed').count() == 0, "title-only rename: no dot on the block or the day")
+        title_dot = await page.locator('[data-pb="3"] .ed').count()
+        await to_hub(page)
+        check(title_dot == 0 and await page.locator('[data-pd="C"] .tag.mine').count() == 0, "title-only rename: no dot on the block, no «изменена» on the day")
         await page.evaluate("window.__UPG.PM.reset('3C')"); await pick(page, 1, "C")
-        check(await page.locator('[data-pb="2"] i.ed').count() == 0, "block dot only where there are changes")
+        check(await page.locator('[data-pb="2"] .ed').count() == 0, "block dot only where there are changes")
         await page.click('[data-qopen="1:0"]'); await page.click('.qe-box [data-qb="s+"]'); await page.keyboard.press("Escape"); await page.wait_for_timeout(120)
-        check(await edited(page, "1C") and await page.evaluate("window.__UPG.sessOf('1C').title") == "Руки и мотор", "real edit after rename: edited, title kept")
+        check(await edited(page, "1C") and await page.evaluate("window.__UPG.sessOf('1C').title") == "Руки и мотор" and await page.locator('.ps-blk [data-pb="1"] .ed .ic').count() == 1, "real edit after rename: edited (pencil on the block), title kept")
         await page.goto(APP + "?tab=today"); await page.wait_for_timeout(400)
         await page.click('button[data-day="C"]'); await page.wait_for_timeout(200)
-        check((await page.text_content(".th-row h2")) == "C · Руки и мотор", "rename shown on Today")
+        check((await page.text_content(".hero h2")) == "Руки и мотор" and (await page.text_content(".hero .day-tile")) == "C", "rename shown on Today (hero: tile C + title)")
         await page.click('[data-planedit]'); await page.wait_for_timeout(300)
         await page.click('[data-pday]'); await page.wait_for_timeout(300)
-        await page.click('#sheet [data-sa="dreset"]'); await page.wait_for_timeout(350)
-        check(not await edited(page, "1C") and (await page.text_content(".psess-h h2")) == "C · Мотор + памп", "reset clears edits and title")
+        await page.click('#sheet [data-sa="dreset"]'); await page.wait_for_timeout(200)
+        check(not await page.locator('#sheet [data-sa="dreset"]').count() and await page.locator('#sheet [data-sa="dresetdo"]').count() == 1 and await edited(page, "1C"), "reset asks for confirmation first")
+        await page.click('#sheet [data-sa="dresetdo"]'); await page.wait_for_timeout(350)
+        check(not await edited(page, "1C") and (await page.text_content("#title")).strip() == "Мотор + памп" and await page.locator(".p-undo [data-pundo]").count() == 1, "reset clears edits and title; undo banner")
 
         # 9. подсказка дня не ведёт в пустую тренировку
         ago = lambda n: page.evaluate(f"(() => {{ const d = new Date(); d.setDate(d.getDate() - {n}); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }})()")
@@ -371,7 +386,7 @@ async def main():
         for w in (360, 375, 412):
             await page.set_viewport_size({"width": w, "height": 800}); await page.wait_for_timeout(150)
             ov = await page.evaluate("""(() => { const box = document.querySelector('.pgroup').getBoundingClientRect();
-                const clip = Array.from(document.querySelectorAll('.qe-box button, .pday, .pr-q')).filter(x => x.getBoundingClientRect().right > box.right + 0.5).length;
+                const clip = Array.from(document.querySelectorAll('.qe-box button, .pr-more, .pr-q, .plan-acts .btn')).filter(x => x.getBoundingClientRect().right > box.right + 0.5).length;
                 return { page: document.documentElement.scrollWidth > innerWidth, clip }; })()""")
             ch = await page.evaluate(CHIPS_OK, ".qe-box .qe-pre, .qe-box .qe-rir")
             check(not ov["page"] and ov["clip"] == 0 and all(not c["hidden"] and c["lines"] <= 2 for c in ch), f"no overflow at {w}px, chips ≤2 lines: {ov} {[c['lines'] for c in ch]}")
@@ -382,13 +397,13 @@ async def main():
         dark = await b.new_context(viewport={"width": 375, "height": 812}, service_workers="block", has_touch=True, color_scheme="dark")
         await dark.add_init_script("try{localStorage.setItem('upg3:noLogin','true')}catch(e){}")
         dp = await dark.new_page()
-        await dp.goto(APP + "?tab=plan"); await dp.wait_for_timeout(500)
+        await dp.goto(APP + "?tab=plan&s=1A"); await dp.wait_for_timeout(500)
         await dp.click('[data-qopen="1:0"]'); await dp.click('.qe-box [data-qb="s+"]'); await dp.wait_for_timeout(150)
         await dp.screenshot(path=f"{SH}/wp2r_inline_dark.png")
         await dp.evaluate("""(() => { localStorage.setItem('upg3:adjust', JSON.stringify([{ id: 't1', title: 'Плечо', enabled: true, changes: [{ exercise: 'machine_press', sets: 2 }] }])); })()""")
         await dp.reload(); await dp.wait_for_timeout(400)
         await dp.evaluate("window.__UPG.PM.replace('1A', 2, 0, '', 'machine_press', false)")
-        await dp.click('[data-pd="B"]'); await dp.click('[data-pd="A"]'); await dp.wait_for_timeout(100)
+        await dp.evaluate("window.__UPG.render()"); await dp.wait_for_timeout(100)
         await dp.click('.pr-open[data-pi="2:0"]'); await dp.wait_for_timeout(400)
         await dp.screenshot(path=f"{SH}/wp2r_sheet_worst_dark.png")
         bg = await dp.evaluate("getComputedStyle(document.body).backgroundColor")

@@ -76,6 +76,11 @@
     spec.series.forEach((s) => {
       const pts = s.points.slice().sort((a, b) => t(a.d) - t(b.d));
       if (s.line !== false && pts.length > 1) {
+        // мягкая заливка под главной серией — цветом серии, читается на обеих темах
+        if (s.main && spec.series.length === 1) {
+          const base = (H - m.b).toFixed(1);
+          el("path", { d: `M${x(pts[0].d).toFixed(1)},${base}` + pts.map((p) => `L${x(p.d).toFixed(1)},${y(p.v).toFixed(1)}`).join("") + `L${x(pts[pts.length - 1].d).toFixed(1)},${base}Z`, class: "area", style: `fill:${s.color}` }, svg);
+        }
         el("path", { d: pts.map((p, i) => `${i ? "L" : "M"}${x(p.d).toFixed(1)},${y(p.v).toFixed(1)}`).join(""), class: "ln", style: `stroke:${s.color}` }, svg);
       }
       if (s.dots !== false) pts.forEach((p) => el("circle", { cx: x(p.d), cy: y(p.v), r: s.r || 4, class: "dot", style: `fill:${s.color}` }, svg));

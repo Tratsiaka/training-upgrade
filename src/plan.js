@@ -81,6 +81,8 @@
     return n <= 1 ? "single" : n === 2 ? "pair" : n === 3 ? "tri" : "giant";
   }
 
+  // счётчик правок — сквозной для всех экземпляров: у новой модели (другая программа) значение никогда не совпадёт со старым снимком
+  let SEQ = 0;
   function create(P, io) {
     let data = norm(io.get());
     let dsToProg = null;
@@ -93,8 +95,8 @@
       dsToProg = null;
     }
     inject();
-    let rev = 0; // счётчик изменений плана: любая запись, откат или подгрузка с сервера
-    const save = () => { rev++; io.set(clone(data)); };
+    let rev = ++SEQ; // номер изменения плана: любая запись, откат или подгрузка с сервера
+    const save = () => { rev = ++SEQ; io.set(clone(data)); };
     const keys = () => Object.keys(P.sessions);
 
     /** Только переименована: связки в записи — копия программы для старых версий (им нужен g),
@@ -423,7 +425,7 @@
     function resetAll() { data.s = {}; save(); }
     const snapshot = () => JSON.stringify(data);
     function restore(snap) { data = norm(JSON.parse(snap)); inject(); save(); }
-    function reload() { data = norm(io.get()); inject(); rev++; }
+    function reload() { data = norm(io.get()); inject(); rev = ++SEQ; }
     /** Старые постоянные замены (ключ swaps: "1A-B-0" → id) переносятся в правки программы. */
     function migrateSwaps(swaps) {
       let n = 0;

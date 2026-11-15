@@ -16,10 +16,10 @@ async def main():
         print("add sheet title:", await page.text_content("#sheetTitle"), "| reps label:", await page.locator('#sheet .qe .fl').nth(1).text_content())
         await page.click('#sheet [data-sa="adddo"]'); await page.wait_for_timeout(300)
         await page.goto(APP + "?tab=plan"); await page.wait_for_timeout(400)
-        await page.click('[data-pb="1"]'); await page.click('[data-pd="A"]'); await page.wait_for_timeout(200)
+        await page.click('[data-pb="1"]'); await page.click('[data-pd="A"]'); await page.wait_for_timeout(200)  # хаб: блок 1 → тренировка A
         last = page.locator(".prow").last
         print("last row:", (await last.inner_text()).replace("\n", " | "))
-        await last.click(); await page.wait_for_timeout(300)
+        await last.locator(".pr-open").click(); await page.wait_for_timeout(300)  # название — шторка упражнения (значения — встроенный редактор)
         await page.click('#sheet .sh-more summary'); await page.wait_for_timeout(120)  # «Считать» — в «Ещё»
         units = await page.locator('#sheet [data-sa="unit"]').count()
         print("unit toggle shown:", units)
@@ -29,6 +29,7 @@ async def main():
             await page.click('#sheet [data-sa="unit"][data-v="sec"]'); await page.wait_for_timeout(200)
             print("after sec:", await page.input_value("#shReps"))
         await page.keyboard.press("Escape"); await page.wait_for_timeout(300)
+        await page.click('.nav-i[data-tab="plan"]'); await page.wait_for_timeout(200)  # повторное касание — к хабу
         await page.click('[data-pd="C"]'); await page.wait_for_timeout(200)
         print("C note:", await page.locator(".psess-note").count())
         print("errors:", errs)

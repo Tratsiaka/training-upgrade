@@ -9,7 +9,7 @@ async def main():
         page = await ctx.new_page(); errs = []
         page.on("pageerror", lambda e: errs.append(str(e)))
         page.on("console", lambda m: errs.append(m.text))
-        await page.goto(APP + "?tab=plan"); await page.wait_for_timeout(500)
+        await page.goto(APP + "?tab=plan&s=1A"); await page.wait_for_timeout(500)
         await page.evaluate("""() => { ['pointerdown','pointermove','pointerup','pointercancel'].forEach(t => document.addEventListener(t, e => { if (t !== 'pointermove' || Math.random() < 0.05) console.log(t, e.pointerType, e.target.className, e.clientY); }, true)); }""")
         await page.click('[data-preorder="1"]'); await page.wait_for_timeout(300)
         last = page.locator(".ro-i").last

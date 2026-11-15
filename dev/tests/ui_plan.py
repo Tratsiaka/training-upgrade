@@ -7,7 +7,8 @@ def check(c, msg):
     (OK if c else FAIL).append(msg); print(("ok  " if c else "FAIL") + " " + msg)
 
 async def rows(page):
-    return await page.evaluate("Array.from(document.querySelectorAll('.prow')).map(r => r.querySelector('.code').textContent + ' ' + r.querySelector('.pr-n').textContent + ' | ' + Array.from(r.querySelectorAll('.pr-s')).map(x=>x.textContent).join(' / '))")
+    # «1а Жим ногами | 3 подхода · 10–12 повторов · 2 запас · 3 с вниз» — номер и название, ячейки значений, теги темпа
+    return await page.evaluate("Array.from(document.querySelectorAll('.prow')).map(r => (r.querySelector('.pr-n').textContent + ' | ' + Array.from(r.querySelectorAll('.pr-s')).map(x => Array.from(x.querySelectorAll('.pc')).map(c => c.querySelector('b').textContent + ' ' + c.querySelector('small').textContent).join(' · ')).join(' / ') + Array.from(r.querySelectorAll('.pr-st .tag')).map(t => ' · ' + t.textContent).join('')).replace(/\\u00a0/g, ' '))")
 async def sess(page, key):
     return await page.evaluate(f"(() => {{ const s = window.__UPG.sessOf('{key}'); return s.groups.filter(g => g.items && ['pair','tri','circuit','single','giant'].includes(g.kind)).map(g => g.kind + ':' + g.items.map(it => it.weekAlt ? it.weekAlt.map(w=>w.ex).join('/') : it.ex).join(',')); }})()")
 async def sheet_open(page):
@@ -25,41 +26,51 @@ async def main():
         page = await ctx.new_page(); errs = []
         page.on("pageerror", lambda e: errs.append(str(e)))
         page.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
-        await page.goto(APP + "?tab=plan"); await page.wait_for_timeout(500)
+        await page.goto(APP + "?tab=plan&s=1A"); await page.wait_for_timeout(500)
         r0 = await rows(page)
-        check(len(r0) == 13 and r0[0].startswith("A1 Жим ногами"), f"plan 1A rows: {len(r0)} first={r0[0][:40]}")
+        check(len(r0) == 13 and r0[0].startswith("1а Жим ногами"), f"plan 1A rows: {len(r0)} first={r0[0][:40]}")
         # 1. params
         await page.click('[data-pi="1:0"]'); await page.wait_for_timeout(350)
         check(await sheet_open(page), "item sheet opens")
         check((await page.text_content("#sheetTitle")) == "Жим ногами", "sheet title")
-        await page.click('#sheet [data-sa="sets"][data-v="1"]'); await page.wait_for_timeout(120)
-        await page.click('#sheet [data-sa="reps"][data-v="8–12"]'); await page.wait_for_timeout(120)
-        await page.click('#sheet [data-sa="rir"][data-v="1"]'); await page.wait_for_timeout(120)
+        check(await page.locator('#sheet [data-sa="sets"], #sheet .qe').count() == 0 and await page.locator('#sheet [data-sa="params"]').count() == 1, "item sheet: no duplicate steppers, «Подходы и повторы» button instead")
         await page.click('#sheet .sh-more summary'); await page.wait_for_timeout(120)  # темп и подсказка — в свёрнутом «Ещё»
         await page.fill('#shNote', "пауза внизу"); await page.press('#shNote', "Enter"); await page.wait_for_timeout(150)
-        await page.fill('#shTempo', "2 с вниз"); await page.click('#sheet [data-sa="rir"][data-v="1–2"]'); await page.wait_for_timeout(200)
+        await page.fill('#shTempo', "2 с вниз"); await page.press('#shTempo', "Enter"); await page.wait_for_timeout(200)
         st = await page.evaluate("JSON.stringify(window.__UPG.sessOf('1A').groups[1].items[0])")
-        check('"sets":4' in st and '"reps":"8–12"' in st and '"rir":"1–2"' in st and "пауза внизу" in st and "2 с вниз" in st, "params applied live (typing then tapping chip keeps both): " + st)
+        check("пауза внизу" in st and "2 с вниз" in st, "tempo and note applied live: " + st)
         await close_sheet(page)
         check("Изменения сохранены" in await toast_text(page), "toast after close: " + await toast_text(page))
         r1 = await rows(page)
-        check("4 × 8–12 · RIR 1–2 · 2 с вниз" in r1[0], "row shows new scheme: " + r1[0])
-        tags = await page.locator('[data-pi="1:0"] .tag').all_inner_texts()
-        check("изменено" in tags, f"tag изменено: {tags}")
-        # undo
+        check("3 подхода · 10–12 повторов · 2 запас · 2 с вниз" in r1[0], "card shows the new tempo as a tag: " + r1[0])
         await page.click("#toast [data-toastundo]"); await page.wait_for_timeout(200)
+        check(await page.evaluate("!window.__UPG.PM.edited('1A')"), "toast undo restores the sheet edits")
+        # «Подходы и повторы» в шторке → шторка закрывается, открыт встроенный редактор этого упражнения
+        await page.click('[data-pi="1:0"]'); await page.wait_for_timeout(350)
+        await page.click('#sheet [data-sa="params"]'); await page.wait_for_timeout(450)
+        check(not await sheet_open(page) and await page.locator('.prow.qe-on .qe-box[data-qk^="1:0"]').count() == 1, "«Подходы и повторы» closes the sheet and opens the inline editor")
+        await page.click('.qe-box [data-qb="s+"]'); await page.wait_for_timeout(120)
+        await page.click('.qe-box .chip[data-qe="reps"][data-v="8–12"]'); await page.wait_for_timeout(120)
+        await page.click('.qe-box .chip[data-qe="rir"][data-v="1–2"]'); await page.wait_for_timeout(120)
+        st = await page.evaluate("JSON.stringify(window.__UPG.sessOf('1A').groups[1].items[0])")
+        check('"sets":4' in st and '"reps":"8–12"' in st and '"rir":"1–2"' in st, "params applied live from the inline editor: " + st)
+        r1 = await rows(page)
+        check("4 подхода · 8–12 повторов · 1–2 запас · 3 с вниз" in r1[0], "card shows three labelled cells: " + r1[0])
+        tags = await page.locator('.pr-open[data-pi="1:0"] .tag').all_inner_texts()
+        check("изменено" in tags, f"tag изменено: {tags}")
+        await page.click('.qe-box [data-qundo]'); await page.wait_for_timeout(200)
         r2 = await rows(page)
-        check("3 × 10–12 · RIR 2 · 3 с вниз" in r2[0] and await page.evaluate("!window.__UPG.PM.edited('1A')"), "undo restores: " + r2[0])
+        check("3 подхода · 10–12 повторов · 2 запас · 3 с вниз" in r2[0] and await page.evaluate("!window.__UPG.PM.edited('1A')"), "undo restores: " + r2[0])
+        await page.keyboard.press("Escape"); await page.wait_for_timeout(100)
         # 2. replace everywhere
         await page.click('[data-pi="1:0"]'); await page.wait_for_timeout(300)
         await page.click('#sheet [data-sa="replace"]'); await page.wait_for_timeout(250)
         await page.click('#sheet [data-sa="scope"][data-v="all"]'); await page.wait_for_timeout(150)
         help_ = await page.text_content("#sheet .sh-help")
         check("3 места" in help_, "scope help: " + help_)
-        await page.click('#sheet [data-sa="pick"][data-v="hack"]'); await page.wait_for_timeout(250)
-        check(await sheet_open(page) and (await page.text_content("#sheetTitle")) == "Гакк-присед (тренажёр)", "back to item sheet with new exercise")
-        await close_sheet(page)
+        await page.click('#sheet [data-sa="pick"][data-v="hack"]'); await page.wait_for_timeout(350)
         t = await toast_text(page)
+        check(not await sheet_open(page) and await page.locator("#toast [data-toastundo]:not([hidden])").count() == 1, "pick closes the sheet, toast with «Отменить»")
         check("3 места" in t, "toast count: " + t)
         for k in ["1A", "2A", "3A", "1C", "2C", "3C"]:
             s = await sess(page, k)
@@ -78,7 +89,7 @@ async def main():
         await page.click('#sheet .sh-more summary'); await page.wait_for_timeout(120)  # «место» — в «Ещё»
         await page.click('#sheet [data-sa="move"][data-v="1"]'); await page.wait_for_timeout(200)
         where = await page.text_content("#sheet .sh-where")
-        check("B1" in where, "moved into B as B1: " + where)
+        check("2а" in where, "moved into the next superset as 2а: " + where)
         await close_sheet(page)
         s = await sess(page, "1A")
         check(s[0] == "single:legpress" and s[1].startswith("tri:deadbug,bench"), f"structure after move: {s[:2]}")
@@ -90,7 +101,7 @@ async def main():
         await page.click('#sheet [data-sa="swapto"][data-v="3:1"]'); await page.wait_for_timeout(250)
         t = await toast_text(page)
         s = await sess(page, "1A")
-        check("Поменяли местами A1 и C2" in t and s[0] == "single:hammer_curl" and "legpress" in s[2], f"swap: {t} | {s[0]} | {s[2]} ({n_opts} options)")
+        check("Поменяли местами 1 и 3б" in t and s[0] == "single:hammer_curl" and "legpress" in s[2], f"swap: {t} | {s[0]} | {s[2]} ({n_opts} options)")
         # 5. group sheet: tier, rest, move, split
         await page.click('[data-pg="2"]'); await page.wait_for_timeout(300)
         await page.click('#sheet [data-sa="tier"][data-v="std"]'); await page.wait_for_timeout(120)
@@ -113,13 +124,13 @@ async def main():
         names = await page.locator(".group .ex[data-ex] .ex-name").all_inner_texts()  # силовые карточки, без разминки
         codes = await page.locator(".group .code").all_inner_texts()
         check(names[:5] == ["Молотковые сгибания", "Разгибания из-за головы (локоть до 90°)", "Жим ногами", "Махи в стороны в тренажёре", "Жук (dead bug)"], f"today shows edited order: {names[:8]}")
-        check(codes[:3] == ["A1", "B1", "B2"], f"today codes relabeled: {codes[:6]}")
+        check(codes[:3] == ["1", "2а", "2б"], f"today codes relabeled (number + а/б in a superset): {codes[:6]}")
         mine = await page.locator(".mine-note").count()
         check(mine == 1, "today notes edited session")
         # 7. today-only swap
         await page.locator('[data-rep]').first.click(); await page.wait_for_timeout(300)
         sc = await page.locator('#sheet [data-sa="scope"].on').inner_text()
-        check(sc == "Сегодня", "today default scope: " + sc)
+        check(sc == "Только сегодня", "today default scope: " + sc)
         await page.locator('#sheet [data-sa="pick"]').first.click(); await page.wait_for_timeout(300)
         t = await toast_text(page)
         first = (await page.locator(".group .ex[data-ex] .ex-name").all_inner_texts())[0]
@@ -137,7 +148,7 @@ async def main():
         s = await sess(page, "1A")
         check(s[0] == "single:ez_curl", f"today → program replace: {s[0]} toast={await toast_text(page)}")
         # 9. add from plan
-        await page.goto(APP + "?tab=plan"); await page.wait_for_timeout(400)
+        await page.goto(APP + "?tab=plan&s=1A"); await page.wait_for_timeout(400)
         await page.click('[data-padd]'); await page.wait_for_timeout(300)
         await page.fill('#sheet [data-sq]', "махи гант"); await page.wait_for_timeout(700)
         await page.locator('#sheet [data-sa="addpick"]').first.click(); await page.wait_for_timeout(250)
@@ -156,6 +167,7 @@ async def main():
         await page.click("[data-libadd]"); await page.wait_for_timeout(300)
         await page.click('#sheet [data-sa="ad"][data-v="B"]'); await page.wait_for_timeout(120)
         await page.click('#sheet [data-sa="ascope"]'); await page.wait_for_timeout(120)
+        await page.click('#sheet .sh-add-more summary'); await page.wait_for_timeout(120)  # «Когда делать» — под «Ещё»
         await page.click('#sheet [data-sa="atier"][data-v="std"]'); await page.wait_for_timeout(120)
         await page.click('#sheet [data-sa="adddo"]'); await page.wait_for_timeout(300)
         t = await toast_text(page)
@@ -170,7 +182,7 @@ async def main():
         check(tagged >= 1, "library marks added exercise 'в программе'")
         # 11. reorder mode: arrows + drag
         await page.goto(APP + "?tab=plan"); await page.wait_for_timeout(400)
-        await page.click('[data-pd="B"]'); await page.wait_for_timeout(200)
+        await page.click('[data-pd="B"]'); await page.wait_for_timeout(200)  # хаб → карточка тренировки B
         await page.click('[data-preorder="1"]'); await page.wait_for_timeout(300)
         n_ro = await page.locator(".ro-i").count()
         before = await sess(page, "1B")
@@ -198,7 +210,9 @@ async def main():
         t = await toast_text(page)
         check(t == "Порядок изменён", "toast after reorder: " + t)
         # 12. reset session + persistence
-        await page.click("[data-preset]"); await page.wait_for_timeout(250)
+        await page.click("[data-pday]"); await page.wait_for_timeout(300)  # меню «⋮» в шапке → «Сбросить к исходной»
+        await page.click('#sheet [data-sa="dreset"]'); await page.wait_for_timeout(200)
+        await page.click('#sheet [data-sa="dresetdo"]'); await page.wait_for_timeout(300)  # сброс — с подтверждением
         check(await page.evaluate("!window.__UPG.PM.edited('1B')"), "reset 1B")
         await page.reload(); await page.wait_for_timeout(600)
         check(await page.evaluate("window.__UPG.PM.edited('1A') && window.__UPG.PM.edited('2B') && !window.__UPG.PM.edited('1B')"), "persisted after reload")
