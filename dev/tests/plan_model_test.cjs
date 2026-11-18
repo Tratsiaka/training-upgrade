@@ -1,6 +1,7 @@
 global.window = {};
 require(require("path").join(__dirname, "../../src/data.js"));
 require(require("path").join(__dirname, "../../src/plan.js"));
+require(require("path").join(__dirname, "../../src/programs.js")); // чистка цикла нагрузки — Programs.cleanCyc
 const P = window.PROGRAM, PM = window.PlanModel;
 let stored = null;
 const m = PM.create(P, { get: () => stored, set: (v) => { stored = v; } });
@@ -287,4 +288,28 @@ console.log("used ids:", m3.usedIds().size, "| edited:", m3.editedKeys());
   assert(d.ds.eq === "dumbbell" && d.unit === "sec", "exerciseFromLib keeps the equipment (ds.eq) for timed loaded exercises");
   const d2 = PM.exerciseFromLib({ id: "1", n: "push-up", t: "pectorals", sec: [], s: [], m: "q" });
   assert(!("eq" in d2.ds), "no eq in the record → no eq field");
+}
+
+/* ---- v4.1: цикл нагрузки пункта (setCyc) ---- */
+{
+  let st = null;
+  const w = PM.create(P, { get: () => st, set: (v) => { st = v; } });
+  const gA = w.sess("1A").groups.findIndex((g) => g.id === "A");
+  const steps = [{ sets: 4, reps: "8", pct: 70 }, { sets: "4", reps: "6-8", rir: 2, pct: "75" }, { sets: 30, reps: "5", pct: 300 }];
+  assert(w.setCyc("1A", gA, 0, steps) === true, "setCyc: steps saved");
+  let it = w.item("1A", gA, 0);
+  assert(it.cyc.length === 3 && it.cyc[1].reps === "6–8" && it.cyc[1].rir === "2" && it.cyc[1].pct === 75 && it.cyc[2].sets === 10 && !("pct" in it.cyc[2]), "setCyc: cleaned — dash, rir as text, sets ≤ 10, pct out of range dropped");
+  assert(it.sets === 4 && it.reps === "8" && it.rir === null && w.edited("1A") && it.chg === 1, "setCyc: the item's own scheme = step 1 (seen by older builds), workout edited");
+  w.setParams("1A", gA, 0, "", { sets: 5, reps: "7" });
+  it = w.item("1A", gA, 0);
+  assert(it.cyc[0].sets === 5 && it.cyc[0].reps === "7" && it.cyc[1].sets === 4, "setParams on an item with a cycle edits step 1 too");
+  assert(w.setCyc("1A", gA, 0, [{ sets: 3, reps: "5" }]) === false && w.setCyc("1A", gA, 0, [{ sets: 3 }, { sets: 2, reps: "5" }]) === false && w.item("1A", gA, 0).cyc.length === 3, "setCyc: fewer than 2 valid steps → refused, cycle unchanged");
+  const before = JSON.stringify(w.item("1A", gA, 0).cyc);
+  assert(w.setCyc("1A", gA, 0, Array(13).fill({ sets: 1, reps: "1" })) === true && w.item("1A", gA, 0).cyc.length === 12 && w.setCyc("1A", gA, 0, JSON.parse(before)) === true, "setCyc: more than 12 steps → cut to 12");
+  assert(w.setCyc("1A", gA, 0, null) === true && !("cyc" in w.item("1A", gA, 0)) && w.item("1A", gA, 0).sets === 5, "setCyc null: cycle removed, plain scheme stays (= step 1)");
+  const gBench = w.sess("1A").groups.findIndex((g) => g.items && g.items.some((x) => x.hl));
+  assert(w.setCyc("1A", gBench, 0, steps) === false && !w.item("1A", gBench, 0).cyc, "setCyc refused on heavy/light (hl) items of the built-in");
+  const gW = w.sess("2B").groups.findIndex((g) => g.items && g.items.some((x) => x.weekAlt)), iW = w.sess("2B").groups[gW].items.findIndex((x) => x.weekAlt);
+  assert(w.setCyc("2B", gW, iW, steps) === false, "setCyc refused on week-alternating (weekAlt) items");
+  assert(w.variants(w.item("1A", gA, 0)).length === 1 && window.Programs.cleanCyc([{ sets: 1, reps: "1" }, { sets: 2, reps: "2", pct: 30 }])[1].pct === 30, "variants() unchanged; one cleanCyc for the app (Programs, pct 30 ok)");
 }

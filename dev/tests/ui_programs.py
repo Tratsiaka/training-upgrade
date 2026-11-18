@@ -106,13 +106,13 @@ async def main():
         # 2. «Новая программа»: шаг 1 — три варианта; «С нуля» → шаг 2 — название со счётчиком, степпер 1–6, числительные
         await page.click('[data-pnew]'); await page.wait_for_timeout(350)
         kinds = await page.evaluate("[...document.querySelectorAll('#sheet [data-sa=pnkind]')].map(b => b.dataset.v)")
-        check(kinds == ["blank", "tpl", "copy"] and "3 шаблона: фулбоди, верх/низ, тяни-толкай-ноги" in await text(page), f"step 1: from scratch, template («3 шаблона: …»), copy: {kinds}")
+        check(kinds == ["blank", "tpl", "copy"] and "8 шаблонов: от фулбоди до силовых циклов" in await text(page), f"step 1: from scratch, template («8 шаблонов: …»), copy: {kinds}")
         await page.click('#sheet [data-sa="pnkind"][data-v="blank"]'); await page.wait_for_timeout(250)
         st2 = await page.evaluate("""(() => ({ name: document.getElementById('shPNew').value, n: document.querySelector('#sheet .stepper b').textContent, cnt: document.querySelector('#sheet .cnt').textContent,
             prim: [...document.querySelectorAll('#sheet .btn.primary')].map(b => b.textContent.trim()), sec: [...document.querySelectorAll('#sheet [data-sa=pnewdo]:not(.primary)')].map(b => b.textContent.trim()) }))()""")
         check(st2["name"] == "Моя программа" and st2["n"] == "3" and st2["cnt"] == "13 / 40" and st2["prim"] == ["Создать и перейти"] and st2["sec"] == ["Только создать"], f"step 2: name prefilled with counter «13 / 40», 3 workouts, two actions: {st2}")
         for _ in range(2): await page.click('#sheet [data-sa="pnn"][data-v="-1"]'); await page.wait_for_timeout(100)
-        check("Тренировка A. Добавить" in await text(page), "numerals: one workout → «Тренировка A.»")
+        check("Тренировка A — каждую неделю. Добавить" in await text(page), "numerals: one workout → «Тренировка A — каждую неделю.»")
         for _ in range(2): await page.click('#sheet [data-sa="pnn"][data-v="1"]'); await page.wait_for_timeout(100)
         await page.fill("#shPNew", "Тест с нуля")
         check(await page.inner_text("#sheet .cnt") == "11 / 40", "counter follows the input")
@@ -256,13 +256,17 @@ async def main():
         check(await page.locator(".sets-sum").count() == 0 and await page.locator(".log-row.done").count() == 0 and not await page.evaluate(f"!!window.__UPG.state.logs['{today}_A@{cid}']"), "custom Today on the same day: the built-in A sets are not shown as done, no custom entry created")
         await switch_to(page, "main")
 
-        # 7. шаблон: состав по дням коротко, «Только создать»
+        # 7. шаблон: карточка коротко (тренировки плитками, без списков упражнений), состав — на шаге 2 под «Состав»; «Только создать»
         await progs(page); await page.click('[data-pnew]'); await page.wait_for_timeout(300)
         await page.click('#sheet [data-sa="pnkind"][data-v="tpl"]'); await page.wait_for_timeout(250)
-        tpl = await page.evaluate("[...document.querySelectorAll('#sheet .pk.tpl')].map(c => ({ n: c.querySelector('.tpl-t > b').textContent, d: c.querySelectorAll('.tpl-d').length, more: [...c.querySelectorAll('.tpl-d')].every(x => x.textContent.includes('и ещё')) }))")
-        check([x["n"] for x in tpl] == ["Фулбоди · 3 дня", "Верх / низ · 4 дня", "Тяни — толкай — ноги · 3 дня"] and [x["d"] for x in tpl] == [3, 4, 3] and all(x["more"] for x in tpl), f"templates: 3 exercises per day + «и ещё N»: {tpl}")
+        tpl = await page.evaluate("[...document.querySelectorAll('#sheet .pk.tpl')].map(c => ({ n: c.querySelector('.tpl-t > b').textContent.replace(/\u00a0/g, ' '), d: c.querySelectorAll('.tpl-n').length, ex: c.querySelectorAll('.tpl-d').length }))")
+        old3 = [x for x in tpl if x["n"] in ("Фулбоди · 3 дня", "Верх / низ · 4 дня", "Тяни — толкай — ноги · 3 дня")]
+        check(len(tpl) == 8 and [x["n"] for x in old3] == ["Фулбоди · 3 дня", "Верх / низ · 4 дня", "Тяни — толкай — ноги · 3 дня"] and [x["d"] for x in old3] == [3, 4, 3] and all(x["ex"] == 0 for x in tpl), f"templates (8, the three v4 ones kept): workouts as tiles, no exercise lists: {tpl}")
         await layout(page, "375 templates")
         await page.click('#sheet [data-sa="pntpl"][data-v="upperlower4"]'); await page.wait_for_timeout(250)
+        await page.click('#sheet .tpl-comp summary'); await page.wait_for_timeout(150)
+        comp = await page.evaluate("[...document.querySelectorAll('#sheet .tpl-comp .tpl-d')].map(x => x.textContent)")
+        check(len(comp) == 4 and "Жим лёжа" in comp[0], f"step 2: «Состав» opens the exercises by workout ({len(comp)})")
         await page.click('#sheet [data-sa="pnewdo"][data-v="only"]'); await page.wait_for_timeout(350)
         tid = await page.evaluate("Object.keys(window.__UPG.progsAll()).find(k => window.__UPG.progsAll()[k].name.startsWith('Верх'))")
         check(await page.evaluate("window.__UPG.curId()") == "main" and await page.locator(".pg-card").count() == 3, "«Только создать»: stays on «Апгрейд», list has 3 programmes")

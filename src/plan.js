@@ -21,6 +21,9 @@
     return JSON.stringify(o === undefined ? null : o);
   }
 
+  /** Чистка цикла нагрузки — одна на приложение: Programs.cleanCyc (src/programs.js, загружается после этого файла, вызывается при правке). */
+  const cleanCyc = (c) => (window.Programs && window.Programs.cleanCyc ? window.Programs.cleanCyc(c) : null);
+
   // Мышцы базы → мышцы программы (для объёма и приоритетов).
   const MUSCLE = {
     pectorals: "chest", chest: "chest", "upper chest": "chest",
@@ -223,8 +226,25 @@
         if (patch.myo) { p.myo = true; p.sets = Math.min(p.sets || 2, 3); }
         else { delete p.myo; delete p.eff; if (!p.reps) p.reps = "12–15"; if (p.rir === undefined) p.rir = "1"; }
       }
+      // у пункта с циклом нагрузки обычная схема — это шаг 1: правка схемы правит и его
+      if (Array.isArray(it.cyc) && p === it && it.cyc[0]) { const s0 = it.cyc[0]; s0.sets = p.sets; if (p.reps) s0.reps = p.reps; if (p.rir) s0.rir = p.rir; else delete s0.rir; }
       it.chg = 1;
       finish(key);
+    }
+    /** Цикл нагрузки пункта: steps — шаги (чистятся), null — убрать цикл (остаётся обычная схема = шаг 1).
+        Схема пункта (её видит старая сборка) = шаг 1. У пунктов встроенной программы с вариантами (hl, weekAlt) — нельзя. */
+    function setCyc(key, gi, ii, steps) {
+      const cur = item(key, gi, ii);
+      if (!cur || cur.hl || cur.weekAlt) return false;
+      let c = null;
+      if (steps != null) { c = cleanCyc(steps); if (!c) return false; }
+      const it = fork(key)[gi].items[ii];
+      if (c) {
+        it.cyc = c; it.sets = c[0].sets; it.reps = c[0].reps; it.rir = c[0].rir != null ? c[0].rir : null;
+      } else delete it.cyc;
+      it.chg = 1;
+      finish(key);
+      return true;
     }
     /** Сдвиг на одну позицию в общем списке упражнений: через границу связки пункт переходит в соседнюю. */
     function move(key, gi, ii, dir) {
@@ -441,7 +461,7 @@
     }
     return {
       sess, edited, letters, strengthIdx, item, variants, paramHolder, exHolder, exIds, count, usedIds, exFromLib, progOf, setUnit,
-      replace, revert, setParams, move, arrange, swapWith, toGroup, remove, add, moveGroup, setGroup, split, removeGroup,
+      replace, revert, setParams, setCyc, move, arrange, swapWith, toGroup, remove, add, moveGroup, setGroup, split, removeGroup,
       copy, clear, setTitle, baseTitle, putItem, titled: (key) => !!(data.s[key] && data.s[key].t), rev: () => rev,
       reset, resetAll, snapshot, restore, reload, migrateSwaps,
       editedKeys: () => Object.keys(data.s).filter(edited), forkInfo: (key) => (edited(key) ? data.s[key] : null), customs: () => data.x

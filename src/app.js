@@ -57,6 +57,7 @@
     trash: '<path d="M3.5 6.5h17M9 6.5V4.5h6v2M18.5 6.5l-.8 13a1.5 1.5 0 0 1-1.5 1.5H7.8a1.5 1.5 0 0 1-1.5-1.5l-.8-13M10 11v6M14 11v6"/>',
     copy: '<rect x="8.5" y="8.5" width="12" height="12" rx="2"/><path d="M15.5 8.5v-3a2 2 0 0 0-2-2h-8a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/>',
     swap: '<path d="M16.5 3.5 20.5 7.5l-4 4M20.5 7.5h-15M7.5 12.5l-4 4 4 4M3.5 16.5h15"/>',
+    "trending-up": '<path d="m3.5 17 6-6 4 4 7-7.5"/><path d="M15 7.5h5.5V13"/>',
     repeat: '<path d="m17 2.5 3.5 3.5L17 9.5"/><path d="M3.5 11.5v-1A4.5 4.5 0 0 1 8 6h12.5"/><path d="M7 21.5 3.5 18 7 14.5"/><path d="M20.5 12.5v1A4.5 4.5 0 0 1 16 18H3.5"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.2 2"/>',
     timer: '<circle cx="12" cy="13.5" r="8"/><path d="M12 9.5v4l2.5 1.6M9.5 2.5h5M19 5.5l-1.5 1.5"/>',
@@ -230,8 +231,12 @@
   const emptySess = (d, b) => { const s = PM && sessOf(`${b || 1}${d}`); return !!s && !PM.strengthIdx(s.groups).length; };
   /** Необязательная тренировка: у «Апгрейда» и копии обязательны A и B; у своей — все. */
   const optional = (d) => !isCustom() && !["A", "B"].includes(d);
-  /** Обязательные тренировки недели: у своей — все непустые. */
-  const reqDays = (b) => days().filter((d) => !optional(d) && !emptySess(d, b));
+  /* Чередование своей программы (rec.rot, src/programs.js): тренировок в неделю меньше, чем в программе, — очередь по кругу. */
+  const rotNow = () => PG.rotOf(curRec());
+  /** Тренировки недели idx по очереди: у своей с чередованием — pw букв, иначе все. */
+  const weekDays = (idx) => (isCustom() ? PG.weekDays(curRec(), idx) : days());
+  /** Обязательные тренировки недели idx: у своей — непустые из очереди недели (без чередования — все непустые). */
+  const reqDays = (b, idx) => (isCustom() ? weekDays(idx == null ? cycleState().idx : idx) : days()).filter((d) => !optional(d) && !emptySess(d, b));
   const weeks = () => (isCustom() ? Infinity : blocks().length * P.meta.blockWeeks);
   /** Разгрузка — последняя неделя блока (только у программ с блоками). */
   const isDeload = (p) => !isCustom() && p.week === P.meta.blockWeeks;
@@ -249,20 +254,30 @@
   /** Дни недели тренировок текущей программы (с понедельника): у встроенной — settings.days, у копии — её wd (i-й день ↔ i-я тренировка),
       у своей — дни, назначенные буквам (wd = { A: 1, C: 4 }). */
   function plannedDays() {
-    const rec = curRec();
+    const rec = curRec(), rot = PG.rotOf(rec);
+    if (rot) return rot.wd.slice(); // чередование: дни мест в неделе, одни и те же каждую неделю
     if (rec && PG.isCustom(rec)) return Object.values(rec.wd || {}).sort((a, b) => monFirst(a) - monFirst(b));
     if (rec) return PG.normWd(Array.isArray(rec.wd) && rec.wd.length ? rec.wd : DEF_DAYS, days().length);
     const d = Array.isArray(state.settings.days) && state.settings.days.length ? state.settings.days : DEF_DAYS;
     return d.slice().sort((a, b) => monFirst(a) - monFirst(b)).slice(0, days().length);
   }
-  /** День недели тренировки d (0–6) или null — «любой день». */
+  /** Неделя, которую показывают расписание и хаб: текущая, а если она закрыта — следующая (как «Сегодня»). */
+  function qIdx() { const cyc = cycleState(); return weekClosed(cyc, weekDone(cyc)) ? cyc.idx + 1 : cyc.idx; }
+  /** Через сколько недель от недели base тренировка d придёт по очереди (0 — на этой). */
+  function weeksTo(d, base) { const R = PG.roundWeeks(curRec()); for (let k = 0; k < R; k++) if (weekDays(base + k).includes(d)) return k; return 0; }
+  /** День недели тренировки d (0–6) или null — «любой день». При чередовании — день её места в ближайшей неделе, где она по очереди. */
   function wdOf(d) {
-    const rec = curRec();
+    const rec = curRec(), rot = PG.rotOf(rec);
+    if (rot) { const w = qIdx() + weeksTo(d, qIdx()), v = rot.wd[weekDays(w).indexOf(d)]; return v == null ? null : v; }
     if (rec && PG.isCustom(rec)) { const v = (rec.wd || {})[d]; return v == null ? null : v; }
     const v = plannedDays()[days().indexOf(d)]; return v == null ? null : v;
   }
-  /** Тренировка на день недели w или null. */
-  const dayOnWd = (w) => days().find((d) => wdOf(d) === w) || null;
+  /** Тренировка на день недели w или null. При чередовании — тренировка этой недели (qIdx) на этом месте. */
+  function dayOnWd(w) {
+    const rot = rotNow();
+    if (rot) { const j = rot.wd.indexOf(w); return j < 0 ? null : weekDays(qIdx())[j] || null; }
+    return days().find((d) => wdOf(d) === w) || null;
+  }
   function posOfIdx(idx) { return PG.posOf(progKind() === "custom" ? "custom" : "up", idx, P.meta, blocks().length); }
   /** Место в цикле текущей программы: у встроенной — ключ cycle (как в выпущенной версии), у своих — progPos[id]. */
   function cycleState() { return Object.assign({ idx: 0, since: null, hist: [] }, isMain() ? S.get("cycle", {}) : posAll()[BOUND] || {}); }
@@ -295,6 +310,10 @@
   /** Неделя закрыта: обязательные сделаны (или пусты), и хоть одна тренировка недели записана.
       У «Апгрейда» обязательны A и B, у своей программы — все тренировки с упражнениями. */
   function weekClosed(cyc, done) {
+    // своя программа: очередь недели (без чередования — все тренировки); хоть одна из неё должна быть записана
+    // неделя раньше смены правил (qa) — мягко: закрыта, если записана хоть одна тренировка
+    if (isCustom() && PG.softWeek(curRec(), cyc.idx)) return days().some((d) => done[d]);
+    if (isCustom()) { const q = weekDays(cyc.idx); return q.every((d) => done[d] || emptyDay(cyc.idx, d)) && q.some((d) => done[d]); }
     return days().filter((d) => !optional(d)).every((d) => done[d] || emptyDay(cyc.idx, d)) && days().some((d) => done[d]);
   }
   /** Запись тренировки d за сегодня — только если она текущей программы. */
@@ -305,13 +324,15 @@
     let idx = cyc.idx, next = false;
     const todayEntry = todayLog(day);
     if (todayEntry && entryHasData(todayEntry) && todayEntry.idx != null) idx = todayEntry.idx;
-    else if (closed && (!optional(day) || done[day])) { idx = cyc.idx + 1; next = true; }
+    // чередование: следующая неделя — только для тренировки из её очереди; остальные «не по очереди» — в текущей, цикл не двигают
+    else if (closed && (rotNow() ? weekDays(cyc.idx + 1).includes(day) : !optional(day) || done[day])) { idx = cyc.idx + 1; next = true; }
     const p = posOfIdx(idx);
     const anyLog = Object.keys(state.logs).some((k) => mineK(k) && entryHasData(state.logs[k])); // записи этой программы
     const pre = !anyLog && cyc.idx === 0 && daysBetween(today, state.settings.start) > 0;
     const custom = isCustom();
+    const rot = custom ? rotNow() : null, q = weekDays(idx);
     return { idx, next, done, closed, cyc, pre, block: p.block, week: p.week, n: p.n, cycle: p.cycle, day, time: +state.time, low: state.ready === "low",
-      light: isDeload(p), heavy: !custom && (p.week === 1 || p.week === 3), custom, now: true };
+      light: isDeload(p), heavy: !custom && (p.week === 1 || p.week === 3), custom, now: true, rot, q, offq: !!rot && !q.includes(day) };
   }
   /* Замены «только сегодня»: { d: дата, m: { "A|legpress": "hack" } } — локально, на следующий день пропадают. */
   function daySwaps() { const v = S.get("daySw", null); return v && v.d === todayISO() && v.m ? v.m : {}; }
@@ -353,10 +374,13 @@
     const cyc = cycleState(), done = weekDone(cyc), ok = (d) => !emptyDay(cyc.idx, d);
     const pd = plannedDays(), wd = new Date().getDay();
     if (isCustom()) {
-      // своя: запланированная на этот день недели несделанная, иначе первая несделанная по порядку
-      const planned = dayOnWd(wd);
-      if (planned && !done[planned] && ok(planned)) return planned;
-      return D.find((d) => !done[d] && ok(d)) || D.find(ok) || D[0];
+      // своя: очередь недели (неделя закрыта — следующей): назначенная на этот день недели несделанная, иначе первая несделанная по очереди
+      const closed = weekClosed(cyc, done), idx = closed ? cyc.idx + 1 : cyc.idx, dn = closed ? {} : done, Q = weekDays(idx);
+      const okQ = (d) => !emptyDay(idx, d), planned = dayOnWd(wd);
+      if (planned && Q.includes(planned) && !dn[planned] && okQ(planned)) return planned;
+      // вся очередь пустая — показываем её первую тренировку: «Сегодня» подскажет добавить упражнения или перейти дальше
+      if (rotNow() && !Q.some(okQ)) return Q[0];
+      return Q.find((d) => !dn[d] && okQ(d)) || Q.find(okQ) || D.find(ok) || D[0];
     }
     if (!done.A && ok("A")) return "A";
     if (!done.B && ok("B")) return "B";
@@ -407,6 +431,16 @@
     return null;
   }
 
+  /** Прошлый результат упражнения с циклом нагрузки на шаге i: записи текущей программы раньше этой тренировки, где st[exId] === i. */
+  function lastForStep(exId, beforeKey, i) {
+    const keys = Object.keys(state.logs).filter((k) => k !== beforeKey && mineK(k) && k.slice(0, 10) <= beforeKey.slice(0, 10) && (k.slice(0, 10) < beforeKey.slice(0, 10) || k < beforeKey)).sort().reverse();
+    for (const k of keys) {
+      const e = state.logs[k], sets = e.ex && e.ex[exId];
+      if (e.st && e.st[exId] === i && sets && sets.some(performed)) return { key: k, date: k.slice(0, 10), sets };
+    }
+    return null;
+  }
+
   /* ---------- prescriptions ---------- */
   function bumpRIR(r, n) {
     if (r == null || r === "") return r;
@@ -434,8 +468,44 @@
     });
     return Object.keys(out).length ? out : null;
   }
+  /** Шаг цикла нагрузки пункта своей программы: номер прохода тренировки (на «Сегодня» — по неделе записи, в «Программе» —
+      ближайший раз, когда тренировка придёт) → шаг по кругу. null — цикла нет. */
+  /** Дата последнего «Начать заново» текущей программы (с неё считается текущий заход) или null. */
+  function restartAt() { const h = cycleState().hist || []; for (let i = h.length - 1; i >= 0; i--) if (h[i] && h[i].why === "restart") return h[i].at || null; return null; }
+  /** Сколько разных недель раньше idx в текущем заходе тренировка d этой программы записана с данными — шаги идут «по выполнению»:
+      пропуск шаг не сжигает, «Повторить неделю» — тот же шаг, сегодняшняя запись шаг в течение дня не меняет. */
+  function doneWeeks(d, idx) {
+    const rs = restartAt(), wk = new Set();
+    Object.keys(state.logs).forEach((k) => {
+      if (!mineK(k)) return;
+      const pk = PG.parseLogKey(k), e = state.logs[k];
+      if (pk.day !== d || e.idx == null || e.idx >= idx || (rs && pk.date < rs) || !entryHasData(e)) return;
+      wk.add(e.idx);
+    });
+    return wk.size;
+  }
+  /** Шаг цикла нагрузки пункта своей программы: сколько раз тренировка уже сделана → шаг по кругу (на «Сегодня» — до недели записи,
+      в «Программе» — до недели, которую показывает «Сегодня»). null — цикла нет. */
+  function cycStep(it, ctx) {
+    if (!isCustom() || !Array.isArray(it.cyc) || it.cyc.length < 2 || it.hl || it.weekAlt) return null;
+    const occ = doneWeeks(ctx.day, ctx.now ? ctx.idx : qIdx()), n = it.cyc.length, i = occ % n;
+    return { i, n, pass: Math.floor(occ / n) + 1, st: it.cyc[i] };
+  }
+  /** «Цикл пройден» с прибавкой максимума — только у одного пункта упражнения: с самым длинным циклом (при равенстве — в первой
+      по алфавиту тренировке и первым по порядку). slotKey — «1A-U1-0». */
+  function cycPrimary(exId, slotKey) {
+    let best = null;
+    days().forEach((d) => { const s = sessOf(`1${d}`); if (s) s.groups.forEach((g) => (isStrength(g) ? g.items : []).forEach((it, ii) => {
+      if (it.ex === exId && Array.isArray(it.cyc) && (!best || it.cyc.length > best.n)) best = { n: it.cyc.length, k: `1${d}-${g.id}-${ii}` };
+    })); });
+    return !!best && best.k === slotKey;
+  }
+  /** Максимум упражнения своей программы (для процентов шага) или null. */
+  const tmOf = (exId) => { const t = (curRec() || {}).tm; return t && t[exId] > 0 ? t[exId] : null; };
   function resolveItem(it, ctx, slotKey) {
     let b = it, variant = null;
+    const cs = cycStep(it, ctx);
+    if (cs) b = Object.assign({}, it, { sets: cs.st.sets, reps: cs.st.reps, rir: cs.st.rir != null ? cs.st.rir : null });
     if (it.hl) { b = Object.assign({ ex: it.ex, orig: it.orig }, ctx.heavy ? it.hl.heavy : it.hl.light); variant = ctx.heavy ? "тяжёлая неделя" : "лёгкая неделя"; }
     if (it.weekAlt) b = Object.assign({}, it.weekAlt[ctx.heavy ? 0 : 1]);
     const adj = adjFor(b.ex, String(slotKey).split("-")[0]);
@@ -456,7 +526,13 @@
       if (ctx.light || ctx.low) { myo = false; sets = 2; reps = "12–15"; rir = ctx.light ? "3–4" : "2"; }
     } else if (ctx.light) { sets = Math.max(2, sets - 1); if (rir != null) rir = "3–4"; }
     else if (ctx.low && sets >= 3) { sets -= 1; rir = bumpRIR(rir, 1); }
-    return { exId, planned, baseId: b.ex, orig: b.orig || null, sets, reps, rir, myo, note: b.note || null, variant, tempo: b.tempo || null, adj };
+    let step = null;
+    if (cs) {
+      // замена «только сегодня»: проценты к замене не применяем — вес подбирается сам, максимум не спрашиваем
+      const swap = exId !== planned, tm = swap ? null : tmOf(exId), pct = cs.st.pct != null ? cs.st.pct : null;
+      step = { i: cs.i, n: cs.n, pass: cs.pass, pct, tm, w: pct != null && !swap ? PG.stepWeight(pct, tm) : null, swap, primary: !swap && cycPrimary(planned, slotKey) };
+    }
+    return { exId, planned, baseId: b.ex, orig: b.orig || null, sets, reps, rir, myo, note: b.note || null, variant, tempo: b.tempo || null, adj, step };
   }
   function tiersFor(ctx) {
     const t = ctx.time <= 60 ? ["core"] : ctx.time <= 90 ? ["core", "std"] : ["core", "std", "max"];
@@ -497,7 +573,7 @@
   const repsWord = (reps) => { const m = String(reps || "").match(/(\d+)\D*$/); return m ? plural(+m[1], "повтор", "повтора", "повторов") : "повт."; };
   const nb = (t) => esc(t).replace(/ /g, "&nbsp;");
   /** Число не отрывается от слова и знака: «80&nbsp;%», «3&nbsp;мин», «2&nbsp;×&nbsp;15». */
-  const nbn = (t) => esc(t).replace(/(\d)\s+(?=[%×–]|с\b|сек|мин|ч\b|км|уд|кг|повтор|подход|майо|недел|блок|трениров|упражнен|раз)/g, "$1&nbsp;").replace(/×\s+(?=\d)/g, "×&nbsp;");
+  const nbn = (t) => esc(t).replace(/(\d)\s+(?=[%×–]|с\b|сек|мин|ч\b|км|уд|кг|повтор|подход|майо|недел|блок|трениров|упражнен|раз)/g, "$1&nbsp;").replace(/×\s+(?=\d)/g, "×&nbsp;").replace(/(\d)\s+в\s+(?=недел)/g, "$1&nbsp;в&nbsp;");
   /** Список через «·» без висячих точек: точка рисуется перед каждым пунктом, а у первого в строке срезается краем. */
   const dl = (parts, cls) => { const p = parts.filter(Boolean); return p.length ? `<span class="dl${cls ? " " + cls : ""}"><span>${p.map((x) => `<i><span>${x}</span></i>`).join("")}</span></span>` : ""; };
   const KIND = { pair: "Суперсет", tri: "Тройка по кругу", circuit: "Круг", single: "Одно упражнение" };
@@ -566,7 +642,23 @@
     return m ? [+m[1], +(m[2] || m[1])] : null;
   }
   function stepUp(w) { return w >= 20 ? Math.max(w + 2.5, Math.round((w * 1.025) / 2.5) * 2.5) : w + (w < 10 ? 1 : 2); }
+  /** Подсказка шага цикла: процент и максимум → вес; без процента — только номер шага (прошлый раз — строкой ниже). */
+  /** Подсказка шага с процентом (или замены на сегодня); "" — у шага нет процента: прогрессия по прошлому разу на этом же шаге. */
+  function stepHint(r) {
+    const s = r.step, head = `Шаг ${s.i + 1} из ${s.n}`;
+    if (s.swap) return `${head}. Замена на сегодня — вес подбери сам.`;
+    if (s.pct != null && s.w != null) return `${head}: ${fmtW(s.pct)} % от ${fmtW(s.tm)} кг — ${fmtW(s.w)} кг.`;
+    if (s.pct != null && s.tm != null) return `${head}: ${fmtW(s.pct)} % от максимума.`;
+    if (s.pct != null) return `${head}: ${fmtW(s.pct)} % от максимума — укажи максимум, и вес посчитается сам.`;
+    return "";
+  }
   function progressionHint(r, ex, prev, prevRir, ctx) {
+    if (r.step) {
+      const h = stepHint(r); if (h) return h;
+      // шаг без процента: двойная прогрессия по прошлому разу на этом же шаге; его нет — только номер шага
+      const head = `Шаг ${r.step.i + 1} из ${r.step.n}.`, g = prev ? progressionHint(Object.assign({}, r, { step: null }), ex, prev, prevRir, ctx) : "";
+      return g ? `${head} ${g}` : `${head} Вес подбери по запасу повторов.`;
+    }
     if (!prev || ex.unit === "sec" || r.myo) return "";
     const sets = prev.sets.filter((s) => s && numOf(s.r) != null);
     if (!sets.length) return "";
@@ -588,6 +680,9 @@
 
   /* Тот же расчёт, что в подсказке, но числом: вес, «пора ли добавлять вес» (up) и «добавь повтор» (add). */
   function progPlan(r, ex, prev, prevRir, ctx) {
+    // шаг цикла: вес от процента важнее двойной прогрессии; без веса шага — без совета (прошлый вес как есть)
+    if (r.step && r.step.w != null) return { w: r.step.w, up: false };
+    if (r.step && r.step.swap) return null;
     if (!prev || r.myo) return null;
     const sets = prev.sets.filter((s) => s && numOf(s.r) != null);
     if (!sets.length) return null;
@@ -636,10 +731,13 @@
         const slotKey = `${sessKey}-${g.id}-${ii}`, r = resolveItem(it, ctx, slotKey), ex = EX[r.exId];
         if (!ex) return;
         const cur = (todayE.ex && todayE.ex[r.exId]) || [];
-        const nSets = Math.max(r.sets || 1, 1);
+        // записанные сегодня подходы не прячутся: строк — не меньше, чем записано (план мог стать короче)
+        let lastDone = -1; cur.forEach((x, i) => { if (setDone(x)) lastDone = i; });
+        const nSets = Math.max(r.sets || 1, 1, lastDone + 1);
         let doneN = 0, nextI = -1;
         for (let i = 0; i < nSets; i++) { if (setDone(cur[i])) doneN++; else if (nextI < 0) nextI = i; }
-        const prev = lastFor(r.exId, key);
+        // цикл нагрузки: «прошлый раз» — последняя запись этой программы на этом же шаге
+        const prev = r.step ? lastForStep(r.exId, key, r.step.i) : lastFor(r.exId, key);
         const prevRir = prev && state.logs[prev.key] && state.logs[prev.key].rir ? state.logs[prev.key].rir[r.exId] : null;
         items.push({ g, gi, ii, it, r, ex, code: codeOf(sess.groups, N, gi, ii), slotKey, slot: `${sessKey}:${gi}:${ii}`, cur, nSets, doneN, nextI, full: doneN >= nSets, prev, prevRir });
       });
@@ -690,6 +788,20 @@
 
   /** Метки суставов у упражнений программы → «береги колено». */
   const JOINT_TAG = { "колено": "колено", "колени": "колени", "локоть": "локоть", "поясница": "поясницу", "плечо": "плечо", "спина": "спину" };
+  /** Под подсказкой шага: «Указать максимум» (процент без максимума) или «Новый круг цикла» с «+2,5 кг». */
+  /** Прибавки максимума сегодня (локально): после «+2,5 кг» кнопка в этот день больше не показывается. */
+  const tmUpToday = () => { const v = S.get("tmUp", null); return v && v.d === todayISO() && Array.isArray(v.ex) ? v.ex : []; };
+  function setTmUp(exId, on) { const l = tmUpToday().filter((x) => x !== exId); if (on) l.push(exId); S.set("tmUp", { d: todayISO(), ex: l }); }
+  /** Под подсказкой шага: «Указать максимум» (процент без максимума) или «Цикл пройден» с «+2,5 кг» (первый шаг нового прохода). */
+  function stepMore(r) {
+    const s = r.step; if (!s || s.swap) return "";
+    if (s.pct != null && s.tm == null) return `<div class="cyc-act"><button class="btn tonal" data-tmset="${esc(r.exId)}">${icon("target", 18)}Указать максимум</button></div>`;
+    if (s.tm != null && s.primary && s.i === 0 && s.pass >= 2) {
+      if (tmUpToday().includes(r.exId)) return `<div class="cyc-act"><span class="small">Максимум: ${fmtW(s.tm)}&nbsp;кг</span></div>`;
+      return `<div class="cyc-act"><span class="small">Цикл пройден — начинаем снова с шага 1. Дался? Подними максимум</span><button class="btn" data-tmup="${esc(r.exId)}" aria-label="Прибавить к максимуму 2,5 кг">${icon("plus", 18)}2,5&nbsp;кг</button></div>`;
+    }
+    return "";
+  }
   function itemHTML(m, ctx, M) {
     const { r, ex, it, code, slot, cur, nSets, prev, prevRir } = m;
     const todaySw = r.exId !== r.planned;
@@ -707,6 +819,7 @@
     const prio = !ctx.custom && ex.m && ex.m.p.some((mu) => P.muscles[mu] && P.muscles[mu].pr === 1); // приоритеты — у «Апгрейда»
     const tags = [];
     if (r.variant) tags.push(`<span class="tag">${icon("activity", 14)}${esc(r.variant)}</span>`);
+    if (r.step) tags.push(`<span class="tag now">${icon("trending-up", 14)}шаг ${r.step.i + 1} из ${r.step.n}</span>`);
     if (r.adj) tags.push(`<span class="tag adj" title="${esc(r.adj.why || r.adj.title)}">корректировка</span>`);
     if (!todaySw && r.orig && EX[r.orig] && !ctx.custom) tags.push(`<span class="tag mine" title="${esc(`В программе было: ${EX[r.orig].n}`)}">ваша замена</span>`);
     if (prio) tags.push(`<span class="tag prio" title="Приоритетная мышца">${icon("star-fill", 14)}приоритет</span>`);
@@ -770,7 +883,7 @@
     const rirPick = sec || !m.full || !open ? "" : `<div class="rir-pick"><span title="Сколько повторов оставалось в запасе в последнем подходе">В запасе</span>${rirChips()}</div>`;
     // одинаковые подходы — одной записью «41,25×10 — 3 подхода»: строка «Прошлый раз» помещается в одну строку
     const pTxt = prev ? prev.sets.filter(setDone).map(setTxt) : [];
-    const prevTxt = prev ? `Прошлый раз (${fmtDate(prev.date)}): ${pTxt.length > 1 && pTxt.every((x) => x === pTxt[0]) ? `${pTxt[0]} — ${pTxt.length} ${plural(pTxt.length, "подход", "подхода", "подходов")}` : pTxt.join(", ")}` : m.doneN ? "" : load ? "Первая запись — вес подберёшь по запасу повторов." : "Первая запись — повторы с запасом.";
+    const prevTxt = prev ? `Прошлый раз (${fmtDate(prev.date)}): ${pTxt.length > 1 && pTxt.every((x) => x === pTxt[0]) ? `${pTxt[0]} — ${pTxt.length} ${plural(pTxt.length, "подход", "подхода", "подходов")}` : pTxt.join(", ")}` : m.doneN || r.step ? "" : load ? "Первая запись — вес подберёшь по запасу повторов." : "Первая запись — повторы с запасом."; // у шага цикла про вес — одна подсказка
     const more = left ? `<button class="lnk small sets-more" data-allsets="${esc(r.exId)}" aria-label="Показать ещё ${left} ${plural(left, "подход", "подхода", "подходов")}">ещё ${left}${icon("chevron-down", 18)}</button>`
       : all && !m.full ? `<button class="lnk small sets-more" data-allsets="${esc(r.exId)}">свернуть</button>` : "";
     const sum = m.full ? cur.slice(0, nSets).filter(setDone).map(setTxt).join(" · ") + (rirNow ? ` · запас ${rirNow}` : "") : "";
@@ -781,7 +894,7 @@
     const body = lite ? `<div class="ex-b pane" data-pane="log"><div class="log">${rows}</div></div>` : `<div class="ex-b pane" data-pane="log" ${open ? "" : "hidden"}>
         ${myoNote}${r.note ? `<div class="ex-note">${esc(r.note)}</div>` : ""}
         ${r.adj && r.adj.why ? `<div class="ex-note adj-why">${esc(r.adj.title)}: ${esc(r.adj.why)}</div>` : ""}
-        <div class="log${all ? " all" : ""}">${hint ? `<div class="hint">${icon("sparkles", 18)}<span>${esc(hint)}</span></div>` : ""}${rows}${rirPick}<div class="prev">${esc(prevTxt)} <span class="saved" data-saved="${r.exId}">сохранено</span></div></div>
+        <div class="log${all ? " all" : ""}">${hint ? `<div class="hint">${icon(r.step ? "trending-up" : "sparkles", 18)}<span>${esc(hint)}</span></div>` : ""}${stepMore(r)}${rows}${rirPick}<div class="prev">${esc(prevTxt)} <span class="saved" data-saved="${r.exId}">сохранено</span></div></div>
         <div class="ex-tools"><button class="lnk" data-toggle="how" aria-expanded="false">${icon("play-circle", 18)}Как делать</button>${swap}${more}</div>${how}
       </div>`;
 
@@ -888,6 +1001,8 @@
     const emptyS = !PM.strengthIdx(sess.groups).length && !entryHasData(todayLog(ctx.day));
     if (ctx.pre) banners.push(ban("accent slim", `Старт — ${WD[parseISO(state.settings.start).getDay()]}, ${fmtDate(state.settings.start)}. Можно начать и раньше.`, "", "calendar"));
     else if (!pd.includes(wd) && !hasToday && !emptyS) banners.push(ban("slim one", "По плану отдых — тренировка ниже.", "", "calendar"));
+    // чередование: все тренировки очереди недели пустые — подсказка и переход дальше, а не тупик
+    if (ctx.rot && ctx.q.every((d) => emptySess(d, 1))) banners.push(ban("warn stack", `В этой неделе ${ctx.q.length > 1 ? `тренировки ${andList(ctx.q)} пустые` : `тренировка ${ctx.q[0]} пустая`} — добавь упражнения или переходи дальше.`, `<button class="btn" data-cyc="next">${icon("arrow-right", 18)}Следующая неделя</button>`));
     if (ctx.next) banners.push(ban("accent slim one", custom ? `Неделя ${ctx.n - 1} закрыта → неделя ${ctx.n}.` : `Неделя ${ctx.n - 1 || weeks()} закрыта → неделя ${ctx.week} блока ${ctx.block}.`, "", "check-circle"));
     if (ctx.light) banners.push(ban("warn", "<b>Разгрузочная неделя.</b> Веса −10–15 %, подходов на один меньше, запас 3–4 повтора. Загляни в «Прогресс»: первая и последняя тренировка блока по каждому упражнению — это и есть прогресс блока."));
     else banners.push(fatigueBanner(ctx));
@@ -898,13 +1013,14 @@
       : timed && ctx.time <= 60 ? `<p class="ctl-note">60 минут — только упражнения «всегда». Руки, икры и база всё равно получают нагрузку.</p>` : "";
 
     const dayBtn = (d, i) => {
-      const w = wdOf(d), sub = w != null ? WD_SHORT[w] : "";
+      const w = ctx.rot ? (ctx.q.includes(d) ? ctx.rot.wd[ctx.q.indexOf(d)] : null) : wdOf(d), sub = w != null ? WD_SHORT[w] : "";
       const full = w != null ? WD[w] + (optional(d) ? ", по желанию" : "") : optional(d) ? "по желанию" : "любой день";
       // засчитана для недели — по-прежнему ctx.done; показ: сегодняшняя, где записаны не все упражнения, — «начата»
       // сегодняшняя, где записаны не все упражнения и не нажато «Закончить», — «начата»
       const dd = ctx.next ? null : ctx.done[d], fin = !!(todayLog(d) || {}).fin;
       const st = !dd ? "" : dd === todayISO() && !fin && !(d === ctx.day && M.items.length && M.exDone >= M.items.length) ? "go" : "ok";
-      return `<button data-day="${d}" class="d-${d}${ctx.day === d ? " on" : ""}${st ? " " + st : ""}" title="${esc(full)}" aria-pressed="${ctx.day === d}" aria-label="Тренировка ${d}: ${esc(full)}${st === "ok" ? ", сделана" : st === "go" ? ", начата" : ""}"><b>${d}</b>${sub ? `<small>${sub}</small>` : ""}${st === "ok" ? `<span class="ok">${icon("check", 12)}</span>` : st === "go" ? `<span class="go"></span>` : ""}</button>`;
+      const off = !!ctx.rot && !ctx.q.includes(d); // чередование: не на этой неделе — приглушена, но выбрать можно
+      return `<button data-day="${d}" class="d-${d}${ctx.day === d ? " on" : ""}${st ? " " + st : ""}${off ? " off" : ""}" title="${esc(off ? "не на этой неделе" : full)}" aria-pressed="${ctx.day === d}" aria-label="Тренировка ${d}: ${esc(off ? "не на этой неделе, можно сделать вне очереди" : full)}${st === "ok" ? ", сделана" : st === "go" ? ", начата" : ""}"><b>${d}</b>${sub ? `<small>${sub}</small>` : ""}${st === "ok" ? `<span class="ok">${icon("check", 12)}</span>` : st === "go" ? `<span class="go"></span>` : ""}</button>`;
     };
     const timeBtn = (t) => `<button data-time="${t}" class="${ctx.time === t ? "on" : ""}" aria-pressed="${ctx.time === t}">${t}&nbsp;мин</button>`;
     const letters = groupNums(sess.groups);
@@ -922,7 +1038,8 @@
     // сегодняшняя запись — в прежней неделе, а цикл уже сдвинули вручную: сказать прямо
     const te = todayLog(ctx.day), cycIdx = ctx.cyc.idx;
     const weekNote = te && entryHasData(te) && te.idx != null && te.idx !== cycIdx ? `Сегодняшняя запись — в ${custom ? `неделе ${ctx.n}` : `неделе ${ctx.week} блока ${ctx.block}`}; цикл уже на ${custom ? `неделе ${posOfIdx(cycIdx).n}` : `неделе ${posOfIdx(cycIdx).week} блока ${posOfIdx(cycIdx).block}`}.` : "";
-    if (!(dpk && dpk.date === todayISO()) && !hasToday && !ctx.pre && wdDay && wdDay !== ctx.day) {
+    if (ctx.offq) why = `${ctx.day} — не на этой неделе: запишется, но неделю не закроет.`;
+    else if (!(dpk && dpk.date === todayISO()) && !hasToday && !ctx.pre && wdDay && wdDay !== ctx.day) {
       why = ctx.done[wdDay] && !ctx.next ? `Тренировка ${wdDay} на этой неделе уже сделана — сегодня тренировка ${ctx.day}.`
         : optional(wdDay) ? `Сегодня тренировка ${ctx.day}: её на этой неделе ещё не было, а ${wdDay} — по желанию.`
         : `Сегодня тренировка ${ctx.day}: её на этой неделе ещё не было (по расписанию — ${wdDay}).`;
@@ -931,8 +1048,8 @@
     return `
       ${banners.join("")}
       <section class="hero th">
-        <div class="th-row hero-top">${dayTile(ctx.day)}<div class="hero-t"><h2>${esc(sess.title)}</h2><span class="hero-sub">${dl([nbn(P.meta.name || "Апгрейд")].concat(custom ? [`неделя&nbsp;${ctx.n}`] : [`блок&nbsp;${ctx.block}`, `неделя&nbsp;${ctx.week}&nbsp;из&nbsp;${P.meta.blockWeeks}`, ctx.light ? "разгрузка" : "", ctx.cycle > 1 ? `круг&nbsp;${ctx.cycle}` : ""]))}</span></div><button class="icon-btn hero-edit" data-planedit="${sessKey}" aria-label="Изменить тренировку ${ctx.day}" title="Изменить тренировку">${icon("pencil", 20)}</button></div>
-        <div class="th-ctl${days().length > 3 ? " many" : ""}">
+        <div class="th-row hero-top">${dayTile(ctx.day)}<div class="hero-t"><h2>${esc(sess.title)}</h2><span class="hero-sub">${dl([nbn(P.meta.name || "Апгрейд")].concat(custom ? [`неделя&nbsp;${ctx.n}${ctx.rot ? ` · ${andList(ctx.q)}` : ""}`] : [`блок&nbsp;${ctx.block}`, `неделя&nbsp;${ctx.week}&nbsp;из&nbsp;${P.meta.blockWeeks}`, ctx.light ? "разгрузка" : "", ctx.cycle > 1 ? `круг&nbsp;${ctx.cycle}` : ""]))}</span></div><button class="icon-btn hero-edit" data-planedit="${sessKey}" aria-label="Изменить тренировку ${ctx.day}" title="Изменить тренировку">${icon("pencil", 20)}</button></div>
+        <div class="th-ctl${days().length > 3 || !timed ? " many" : ""}">
           <div class="day-seg" role="group" aria-label="Тренировка">${days().map((d, i) => dayBtn(d, i)).join("")}</div>
           <button class="ctl-sum" data-ctl="1" aria-expanded="${open}" aria-controls="ctlMore" aria-label="${timed ? `Время и самочувствие: ${ctx.time} минут, ` : "Самочувствие: "}${ctx.low ? "так себе" : "норм"}">${icon(timed ? "clock" : "activity", 20)}<span class="cs-t"><b>${timed ? `${ctx.time}&nbsp;мин` : "Самочувствие"}</b><small class="${ctx.low ? "low" : ""}">${ctx.low ? "так&nbsp;себе" : "норм"}</small></span><span class="car" aria-hidden="true">${icon("chevron-down", 18)}</span></button>
         </div>
@@ -1063,12 +1180,16 @@
           const adj = adjFor(b.ex, `${block}${day}`);
           const ex = EX[adj && adj.replace_with && EX[adj.replace_with] ? adj.replace_with : b.ex];
           if (!ex || !ex.m) return;
-          const sets = adj && adj.sets != null ? +adj.sets : b.myo ? (b.eff || 2) : b.sets;
+          const cs = b === it ? cycStep(it, { day, plan: true }) : null; // цикл нагрузки — подходы текущего шага
+          const sets = adj && adj.sets != null ? +adj.sets : b.myo ? (b.eff || 2) : cs ? cs.st.sets : b.sets;
           ex.m.p.forEach((m) => add(m, "d", sets));
           ex.m.s.forEach((m) => add(m, "i", sets));
         });
       });
     });
+    // чередование: в среднем за неделю круга — сумма по всем тренировкам × pw / n
+    const rot = isCustom() ? rotNow() : null;
+    if (rot) Object.keys(vol).forEach((m) => { vol[m].d *= rot.pw / days().length; vol[m].i *= rot.pw / days().length; });
     return vol;
   }
   function volumeChart(block, withSat) {
@@ -1082,7 +1203,7 @@
     const bars = rows.map((r) => {
       const w = (r.t / max) * 100;
       if (custom) r.pr = 0; // у своей программы приоритетов мышц нет
-      const tip = `${r.n}: ${fmtNum(r.t)} подх./нед. — прямые ${fmtNum(r.d)}, косвенные ${fmtNum(r.i)} × 0,5`;
+      const tip = `${r.n}: ${fmtNum(r.t)} подх./нед.${rotNow() && custom ? " в среднем" : ""} — прямые ${fmtNum(r.d)}, косвенные ${fmtNum(r.i)} × 0,5`;
       return `<div class="bar-row" title="${esc(tip)}"><div class="bar-lab">${esc(r.n)}</div>
         <div class="bar-track"><div class="bar" style="width:max(3px, calc(${w}% - 40px));background:${col[r.pr]}"></div>
         <span class="bar-val" style="left:max(3px, calc(${w}% - 40px))">${fmtNum(r.t)}</span></div></div>`;
@@ -1137,14 +1258,20 @@
     // недели, через которые перешли вручную («Следующая неделя», «Следующий блок», «Разгрузка сейчас», выбор недели), — не «пропущены»
     const manual = new Set();
     (cyc.hist || []).forEach((h) => { if (h && h.why !== "auto" && h.to > h.from) for (let x = h.from; x < h.to; x++) manual.add(x); });
-    const need = custom ? Math.max(1, reqDays(1).length) : 2, bw = P.meta.blockWeeks;
+    const bw = P.meta.blockWeeks;
+    // своя программа: «сделана» — все тренировки очереди этой недели (при чередовании очередь у каждой недели своя)
+    // неделя раньше смены правил — «сделана», если записана хоть одна тренировка (её очередь не известна)
+    const soft = (idx) => custom && PG.softWeek(curRec(), idx);
+    const needOf = (idx) => (soft(idx) ? 1 : custom ? Math.max(1, reqDays(1, idx).length) : 2);
+    const cntOf = (idx, s) => (custom && !soft(idx) ? weekDays(idx).filter((d) => s.has(d)).length : s.size);
     const cell = (idx, num, lab0, dl) => {
-      const s = by[idx], n = s ? s.size : 0;
-      const st = idx < cyc.idx ? (n >= need ? "done" : n ? "part" : manual.has(idx) ? "skip" : "miss") : idx === cyc.idx ? "cur" : "fut";
-      const lab = `${lab0}: ${st === "cur" ? "сейчас" : st === "fut" ? "впереди" : st === "skip" ? "перешли дальше вручную" : n ? `тренировок ${n}` : "пропущена"}`;
+      const s = by[idx], n = s ? cntOf(idx, s) : 0, all = s ? s.size : 0, need = needOf(idx);
+      const st = idx < cyc.idx ? (n >= need ? "done" : all ? "part" : manual.has(idx) ? "skip" : "miss") : idx === cyc.idx ? "cur" : "fut";
+      const lab = `${lab0}: ${st === "cur" ? "сейчас" : st === "fut" ? "впереди" : st === "skip" ? "перешли дальше вручную" : all ? `тренировок ${all}` : "пропущена"}`;
       return `<span class="wk ${st}${dl ? " dl" : ""}" title="${esc(lab)}" aria-label="${esc(lab)}">${num}</span>`;
     };
-    const doneTxt = days().map((d) => `${d}&nbsp;— ${ctx.done[d] && !ctx.next ? "да" : "нет"}`).join(", ");
+    const curQ = custom ? weekDays(cyc.idx) : days();
+    const doneTxt = curQ.map((d) => `${d}&nbsp;— ${ctx.done[d] && !ctx.next ? "да" : "нет"}`).join(", ");
     const legend = `<div class="legend"><span><i class="lg done"></i>сделана</span><span><i class="lg part"></i>частично</span><span><i class="lg miss"></i>пропущена</span><span><i class="lg cur"></i>сейчас</span>${custom ? "" : `<span><i class="lg dl"></i>разгрузка</span>`}</div>`;
     const more = (btns, go) => `<details class="cyc-more"${state.cycMore ? " open" : ""} data-cycmore="1"><summary>Ещё действия${icon("chevron-down", 18)}</summary>
         <div class="ex-tools cyc-btns">${btns}</div>${go}</details>`;
@@ -1156,11 +1283,12 @@
       <h3>${icon("repeat", 20)}Недели</h3>
       <div class="cyc one" role="group" aria-label="Недели программы"><div class="cyc-b"><div class="cyc-cells w8">${cells}</div></div></div>
       ${legend}
-      <p class="small"><b>Сейчас:</b> неделя ${cur.n}. Сделано: ${doneTxt}.</p>
+      ${ctx.closed ? `<p class="small"><b>Неделя ${cur.n} закрыта.</b> Дальше — неделя ${cur.n + 1}${rotNow() ? ` (${weekDays(cyc.idx + 1).join(", ")})` : ""}: начнётся с первого подхода.</p>`
+        : `<p class="small"><b>Сейчас:</b> неделя ${cur.n}${rotNow() && !soft(cyc.idx) ? ` (${curQ.join(", ")})` : ""}. Сделано: ${soft(cyc.idx) ? days().filter((d) => ctx.done[d]).join(", ") || "пока ничего" : doneTxt}.</p>`}
       <button class="btn primary cyc-main" data-cyc="next">${icon("arrow-right", 20)}Следующая неделя</button>
       ${more(`<button class="btn" data-cyc="repeat">Повторить неделю</button><button class="btn" data-cyc="restart">Начать заново</button>`, cyc.idx > 0 ? `<label class="small cyc-go">Вернуться к неделе <select data-cycgo="1" aria-label="Вернуться к неделе">${opts}</select></label>` : "")}
     </section>
-      <details class="card acc"><summary><h3>Как считаются недели</h3></summary><div class="acc-b"><p class="small">Неделя закрывается, когда сделаны все тренировки с упражнениями (${days().join(", ")}). Пропуски не сбивают программу — она ждёт на той же неделе. Недели идут подряд: «Неделя 1», «Неделя 2» и дальше.</p></div></details>`;
+      <details class="card acc"><summary><h3>Как считаются недели</h3></summary><div class="acc-b"><p class="small">${rotNow() ? `Тренировки идут по очереди, ${rotNow().pw} в неделю: ${esc(rotPhrase(days().length, rotNow().pw))} Неделя закрывается, когда сделаны тренировки её очереди с упражнениями. Другую тренировку можно сделать и вне очереди — она запишется, но неделю не закроет.` : `Неделя закрывается, когда сделаны все тренировки с упражнениями (${days().join(", ")}).`} Пропуски не сбивают программу — она ждёт на той же неделе. Недели идут подряд: «Неделя 1», «Неделя 2» и дальше.</p></div></details>`;
     }
     const cyc3 = blocks().map((b, bi) => {
       const cells = Array.from({ length: bw }, (_, w) => cell(base + bi * bw + w, w + 1, `Блок ${b.id}, неделя ${w + 1}${w === bw - 1 ? " — разгрузка" : ""}`, w === bw - 1)).join("");
@@ -1184,7 +1312,7 @@
   /** Сетка недели: 7 ячеек ≥ 44 px, в ячейке — плитка-буква на цвете тренировки или прочерк. У своей программы тап — шторка
       «Что в этот день»; у встроенной и копии — включить или снять день (i-й день ↔ i-я тренировка). */
   function weekGrid() {
-    const custom = isCustom();
+    const custom = isCustom() && !rotNow(); // при чередовании — как у встроенной: тап включает или снимает день
     return [1, 2, 3, 4, 5, 6, 0].map((wd) => {
       const d = dayOnWd(wd), what = d ? `тренировка ${d}${optional(d) ? ", по желанию" : ""}` : "отдых";
       return `<button class="wd${d ? ` on d-${d}` : ""}${d && optional(d) ? " opt" : ""}" ${custom ? `data-wcell="${wd}"` : `data-wday="${wd}"`} ${custom ? 'aria-haspopup="dialog"' : `aria-pressed="${!!d}"`} aria-label="${WD[wd]}: ${what}${custom ? ". Выбрать, что в этот день" : ""}">${d ? dayTile(d, "sm") : `<span class="wd-rest" aria-hidden="true">—</span>`}<small>${WD_SHORT[wd]}</small></button>`;
@@ -1192,12 +1320,26 @@
   }
   /** Подпись под сеткой: у своей — какие тренировки без дня. */
   function weekGridNote() {
+    const rot = rotNow();
+    if (rot) return `Дни одни и те же каждую неделю, тренировки в них меняются по очереди — в ячейках эта неделя. Нажми на день — сделать его тренировочным или выходным, не больше ${numW(rot.pw, "дня", "дней", "дней")}.`;
     if (!isCustom()) return `Нажми на день — сделать его тренировочным или выходным. ${Cap(numW(days().length, "день", "дня", "дней"))} максимум: ${days().join(", ")} идут по порядку недели.`;
     const free = days().filter((d) => wdOf(d) == null);
     return free.length ? `Без дня: ${free.join(", ")} — в любой свободный день. Нажми на день недели — выбрать, что в этот день.` : "У каждой тренировки свой день. Нажми на день недели — поменять.";
   }
   /** Дни недели: не больше, чем тренировок; i-й выбранный день ↔ i-я тренировка. У встроенной — settings.days, у своих — wd записи. */
   function toggleWeekday(wd) {
+    const rot = rotNow();
+    if (rot) {
+      // чередование: дни мест в неделе (rot.wd), не больше «тренировок в неделю»; пусто можно — «любой день»
+      const pd = rot.wd.slice(), i = pd.indexOf(wd);
+      if (i >= 0) pd.splice(i, 1);
+      else if (pd.length >= rot.pw) return `Дней — не больше, чем тренировок в неделю (${rot.pw}). Сначала сними один из них.`;
+      else pd.push(wd);
+      const r = PG.setRotWd(curRec(), pd);
+      if (!r.error) saveRec(r.rec);
+      state.day = resetDay();
+      return "";
+    }
     let pd = plannedDays().slice();
     const i = pd.indexOf(wd), n = days().length;
     if (i >= 0) { if (pd.length === 1) return "Нужен хотя бы один день."; pd.splice(i, 1); }
@@ -1299,10 +1441,14 @@
   const SLOT_CASE = { nom: "тренировка", gen: "тренировки", dat: "тренировке", acc: "тренировку" };
   const slotName = (k, c) => `${SLOT_CASE[c || "nom"]} ${k[1]}${multiBlock() ? `, блок ${k[0]}` : ""}`;
   const Cap = (s) => s[0].toUpperCase() + s.slice(1);
+  /** «A», «A и B», «A, B и C». */
+  const andList = (l) => (l.length < 2 ? l.join("") : `${l.slice(0, -1).join(", ")} и ${l[l.length - 1]}`);
   /** Сводка программы: «3 блока по 5 недель · 3 тренировки в неделю» / «4 тренировки в неделю». rec — запись (по умолчанию текущая). */
   function progParts(rec) {
     const r = rec === undefined ? curRec() : rec, custom = PG.isCustom(r), nd = PG.daysOf(r).length;
-    const nb2 = custom ? 1 : BUILTIN.blocks.length, bw = BUILTIN.meta.blockWeeks;
+    const nb2 = custom ? 1 : BUILTIN.blocks.length, bw = BUILTIN.meta.blockWeeks, rot = PG.rotOf(r);
+    // чередование: «4 тренировки · 2 в неделю · круг 2 недели»
+    if (rot) { const R = PG.roundWeeks(r); return [`${nd}&nbsp;${plural(nd, "тренировка", "тренировки", "тренировок")}`, `${rot.pw}&nbsp;в&nbsp;неделю`, `круг&nbsp;${R}&nbsp;${plural(R, "неделя", "недели", "недель")}`]; }
     return (nb2 > 1 ? [`${nb2}&nbsp;${plural(nb2, "блок", "блока", "блоков")} по&nbsp;${bw}&nbsp;${plural(bw, "неделе", "недели", "недель")}`] : []).concat(`${nd}&nbsp;${plural(nd, "тренировка", "тренировки", "тренировок")} в&nbsp;неделю`);
   }
   const progSummary = () => progParts().join(" · ").replace(/&nbsp;/g, " ");
@@ -1313,9 +1459,11 @@
     const cp = posOfIdx(ctx.cyc.idx);
     if (ctx.custom) {
       // своя программа: недели подряд — полоса показывает, сколько тренировок этой недели сделано
-      const req = reqDays(1), dn = req.filter((d) => ctx.done[d]).length, tot = req.length, pct = tot ? Math.round((dn / tot) * 100) : 0;
+      // та же неделя, что на «Сегодня»: закрыта текущая — уже следующая (в ней пока ничего не сделано)
+      const qi = qIdx(), done = qi === ctx.cyc.idx ? ctx.done : {}, soft = PG.softWeek(curRec(), qi);
+      const req = soft ? days().filter((d) => done[d]) : reqDays(1, qi), dn = req.filter((d) => done[d]).length, tot = req.length, pct = tot ? Math.round((dn / tot) * 100) : 0;
       bar = `<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="${tot}" aria-valuenow="${dn}" aria-label="Тренировок за неделю">
-        <div class="prog-t"><span><b>Неделя&nbsp;${cp.n}</b></span><span>${tot ? `сделано ${dn}&nbsp;из&nbsp;${tot}` : "тренировки пустые"}</span></div>
+        <div class="prog-t"><span><b>Неделя&nbsp;${qi + 1}</b>${ctx.rot && !soft ? ` · ${andList(weekDays(qi))}` : ""}</span><span>${tot ? `сделано ${dn}&nbsp;из&nbsp;${tot}` : "тренировки пустые"}</span></div>
         <div class="prog-bar"><i style="width:${pct}%"></i></div></div>`;
     } else {
       const n = cp.n, W = weeks(), pct = Math.round((n / W) * 100);
@@ -1340,19 +1488,23 @@
   /* --- хаб --- */
   function planHub(ctx) {
     const b = state.pb, pc = planCtx(b, state.pd, ctx), t = TIMES.includes(+state.time) ? +state.time : 90, custom = isCustom();
+    const rotQ = custom && !!rotNow(), qi = rotQ ? qIdx() : 0;
     const cards = days().map((d) => {
       const key = `${b}${d}`, s = sessOf(key); if (!s) return "";
       const c = Object.assign({}, pc, { day: d, time: t });
       const n = sessCount(s, c), mus = sessMuscles(s), ed = !custom && PM.edited(key), est = estMinutes(s, c, key);
       const sub = n ? dl([`${n}&nbsp;${plural(n, "упражнение", "упражнения", "упражнений")}`, `≈&nbsp;${est}&nbsp;мин`]) : `<span class="sc-empty">${icon("plus", 14)}Пусто — добавь упражнения</span>`;
-      const tags = `<span class="tag">${icon("calendar", 14)}${dayWd(d)}</span>${optional(d) ? `<span class="tag">по желанию</span>` : ""}${ed ? `<span class="tag mine">${icon("pencil", 14)}изменена</span>` : ""}`;
+      // чередование: когда тренировка по очереди — «эта неделя» / «следующая неделя» / «через 2 недели»; цикл нагрузки — тег «цикл»
+      const k = rotQ ? weeksTo(d, qi) : -1, when = k < 0 ? "" : k === 0 ? "эта неделя" : k === 1 ? "следующая неделя" : `через ${numW(k, "неделю", "недели", "недель")}`;
+      const hasCyc = custom && PM.strengthIdx(s.groups).some((gi) => s.groups[gi].items.some((it) => Array.isArray(it.cyc)));
+      const tags = `${when ? `<span class="tag${k === 0 ? " now" : ""}">${esc(when)}</span>` : ""}<span class="tag">${icon("calendar", 14)}${dayWd(d)}</span>${hasCyc ? `<span class="tag">${icon("trending-up", 14)}цикл</span>` : ""}${optional(d) ? `<span class="tag">по желанию</span>` : ""}${ed ? `<span class="tag mine">${icon("pencil", 14)}изменена</span>` : ""}`;
       // пустая тренировка своей программы — сразу кнопка первого шага
       const add = "";
       return `<div class="sess-w"><button class="sess-card" data-pd="${d}" aria-label="Тренировка ${d}: ${esc(s.title)}${ed ? ", изменена" : ""}${n ? "" : ", пусто"}">${dayTile(d)}
         <span class="sc-main"><b class="sc-t">${esc(s.title)}</b><span class="sc-sub">${sub}</span><span class="tags sc-tags">${tags}</span>${mus.length ? `<span class="sc-mus">${dl(mus.map(esc))}</span>` : ""}</span>${icon("chevron-right", 20)}</button>${add}</div>`;
     }).join("");
     const nd = days().length;
-    const addDay = custom ? (nd < PG.MAX_DAYS ? `<button class="btn wide sess-add" data-dayadd="1">${icon("plus", 20)}Добавить тренировку</button>` : `<p class="small muted sess-max">${icon("info", 16, "inl")} Это максимум — ${PG.MAX_DAYS} тренировок в неделю.</p>`) : "";
+    const addDay = custom ? (nd < PG.MAX_DAYS ? `<button class="btn wide sess-add" data-dayadd="1">${icon("plus", 20)}Добавить тренировку</button>` : `<p class="small muted sess-max">${icon("info", 16, "inl")} Это максимум — ${PG.MAX_DAYS} тренировок${rotQ ? " в программе" : " в неделю"}.</p>`) : "";
     const wds = plannedDays().map((x) => WD_SHORT[x]).join("\u00a0· ") || "дни не выбраны";
     const manage = [["sched", custom ? "Расписание и недели" : "Расписание и цикл", custom ? `${wds} — неделя ${posOfIdx(ctx.cyc.idx).n}` : `${wds} — неделя ${posOfIdx(ctx.cyc.idx).week}\u00a0из\u00a0${P.meta.blockWeeks}`, "calendar", "rl-blue", "pv"],
       ["about", "О программе", custom ? "Описание и объём по мышцам" : "Цели блоков, объём по мышцам, как это устроено", "book-open", "rl-violet", "pv"]];
@@ -1420,10 +1572,17 @@
   /* --- экран тренировки (конструктор) --- */
   /* Карточка упражнения: плитка, номер и название (тап — шторка упражнения), «⋮» — то же меню;
      подписанные значения с карандашом — встроенный редактор прямо под карточкой. У одиночного — строка отдыха. */
+  /** «4 × 8 · 70 %» — шаг цикла коротко. */
+  const stepTxt = (x) => `${x.sets} × ${x.reps}${x.pct != null ? ` · ${fmtW(x.pct)} %` : ""}`;
+  /** Может ли у пункта быть цикл нагрузки: своя программа, обычный пункт (не тяжёлая/лёгкая и не чередование упражнений). */
+  const cycOk = (it) => isCustom() && !!it && !it.hl && !it.weekAlt;
   function prowHTML(key, it, gi, ii, code, single) {
     const vs = PM.variants(it), first = EX[vs[0].ex] || {};
     const title = it.weekAlt ? vs.map((v) => exName(v.ex)).join(" / ") : exName(vs[0].ex);
-    const lines = vs.map((v) => `<span class="pr-s">${vs.length > 1 ? `<span class="pr-v">${esc(v.label)}</span>` : ""}<span class="pcs">${schemeCells(v.p)}</span></span>`).join("");
+    // цикл нагрузки: ячейки текущего шага, тег «шаг 2 из 4» и все шаги мелко (текущий выделен)
+    const cs = cycOk(it) ? cycStep(it, { day: key[1], plan: true }) : null;
+    const lines = cs ? `<span class="pr-s"><span class="pcs">${schemeCells(cs.st)}</span><span class="tags pr-cy"><span class="tag now">${icon("trending-up", 14)}шаг ${cs.i + 1} из ${cs.n}</span></span><span class="pr-steps">${it.cyc.map((x, i) => (i === cs.i ? `<b>${esc(stepTxt(x))}</b>` : esc(stepTxt(x)))).join(" → ")}</span></span>`
+      : vs.map((v) => `<span class="pr-s">${vs.length > 1 ? `<span class="pr-v">${esc(v.label)}</span>` : ""}<span class="pcs">${schemeCells(v.p)}</span></span>`).join("");
     const stags = schemeTags(vs[0].p, first);
     const notes = vs.map((v) => v.p.note).filter(Boolean);
     const tags = [], marks = !isCustom(); // у своей программы нет исходной версии — всё «добавлено», метки не нужны
@@ -1438,7 +1597,7 @@
     return `<div class="prow${fl}${open ? " qe-on" : ""}">
       <div class="pr-top"><button class="pr-open" data-pi="${gi}:${ii}" aria-label="${esc(code)} ${esc(title)}: заменить, темп, место, убрать">${tileHTML(exGroup(vs[0].ex))}<span class="pr-main"><span class="pr-n"><span class="code">${codeHTML(code)}</span> ${esc(title)}</span>${tags.length ? `<span class="tags">${tags.join("")}</span>` : ""}</span></button>
         <button class="icon-btn pr-more" data-pi="${gi}:${ii}" aria-label="Действия: ${esc(title)}">${icon("more-vertical", 20)}</button></div>
-      <button class="pr-q" data-qopen="${gi}:${ii}" aria-expanded="${open}" aria-label="${esc(code)}: подходы, повторы и запас — изменить здесь"><span class="pr-qs">${lines}${stags ? `<span class="tags pr-st">${stags}</span>` : ""}</span><span class="pr-ed" aria-hidden="true">${icon(open ? "x" : "pencil", 18)}</span></button>
+      <button class="pr-q" ${cs ? `data-cycopen="${gi}:${ii}" aria-haspopup="dialog" aria-label="${esc(code)}: цикл нагрузки, шаг ${cs.i + 1} из ${cs.n} — изменить"` : `data-qopen="${gi}:${ii}" aria-expanded="${open}" aria-label="${esc(code)}: подходы, повторы и запас — изменить здесь"`}><span class="pr-qs">${lines}${stags ? `<span class="tags pr-st">${stags}</span>` : ""}</span><span class="pr-ed" aria-hidden="true">${icon(open && !cs ? "x" : "pencil", 18)}</span></button>
       ${notes.length ? `<p class="pr-note pr-note-out">${nbn(notes[0])}</p>` : ""}
       ${rest}
       ${open ? qeRowHTML(key, it, gi, ii) : ""}</div>`;
@@ -1481,6 +1640,7 @@
       ${adj ? `<p class="small qe-adj">Действует корректировка агента «${esc(adj.title)}» — на тренировке она главнее.</p>` : ""}
       ${qeHTML(v.p, { attr: "qe", act: { sets: "sets", reps: "reps", rir: "rir" }, sec: ex.unit === "sec", tid: "qeReps", tfield: 'data-qf="reps"', presets: true })}
       ${v.p.myo ? `<p class="small muted">Майо-подход: 12–20 до отказа, затем мини-подходы по 3–5 через 15&nbsp;с.</p>` : ""}
+      ${cycOk(it) && !v.p.myo ? `<button class="btn sh-row qe-cyc" data-cycopen="${gi}:${ii}" aria-haspopup="dialog">${icon("trending-up", 22)}<span>Цикл нагрузки<small>менять подходы и вес от раза к разу</small></span>${icon("chevron-right", 20)}</button>` : ""}
       <div class="qe-foot"><button class="lnk" data-pi="${gi}:${ii}">Настройки${icon("chevron-right", 18)}</button><span class="row-btns"><button class="btn ghost" data-qundo="1" ${q.changed ? "" : "disabled"}>${icon("undo", 18)}Отменить</button><button class="btn tonal" data-qopen="${gi}:${ii}">${icon("check", 18)}Готово</button></span></div></div>`;
   }
   /** Правка из быстрого редактора — сразу в программу. Отмена — кнопкой в редакторе, только этого упражнения. */
@@ -1580,8 +1740,36 @@
       <div class="plan-acts${state.qe ? " qe-open" : ""}"><button class="btn primary" data-padd="1">${icon("plus", 20)}Добавить упражнение</button><button class="btn" data-preorder="1">${icon("arrow-up-down", 18)}Порядок</button></div>` : ""}`;
   }
   /* --- расписание и цикл: сначала дни, затем цикл --- */
+  /** «Тренировок в неделю» (своя программа): сегмент 1 … n и при чередовании — таблица круга. */
+  function rotCard(ctx) {
+    const rec = curRec(), D = days(), n = D.length, rot = rotNow(), pw = rot ? rot.pw : n;
+    if (n < 2) return "";
+    const seg = `<div class="seg pw-seg" role="radiogroup" aria-label="Тренировок в неделю">${D.map((_, i) => { const v = i + 1, on = v === pw; return `<button data-pw="${v}" class="${on ? "on" : ""}" role="radio" aria-checked="${on}" aria-label="${v} в неделю${v === n ? " — все каждую неделю" : " — по очереди"}">${v}</button>`; }).join("")}</div>`;
+    let body = `<p class="small muted pw-note">Все ${n} каждую неделю. Выбери меньше — тренировки пойдут по очереди, например ${esc(rotPhrase(n, Math.min(2, n - 1)))}</p>`;
+    if (rot) {
+      // от недели, которую показывает «Сегодня», вперёд: не больше 4 строк, плитки и названия в одну строку
+      const R = PG.roundWeeks(rec), qi = qIdx(), rows = [];
+      for (let k = 0; k < Math.min(R, 4); k++) {
+        const w = qi + k, q = weekDays(w);
+        rows.push(`<li class="rt-row${k ? "" : " cur"}"><span class="rt-w">Неделя&nbsp;${w + 1}${k ? "" : `<small>сейчас</small>`}</span><span class="rt-d">${q.map((d) => `<span class="rt-x">${dayTile(d, "sm")}<span>${esc(sessOf(`1${d}`).title)}</span></span>`).join("")}</span></li>`);
+      }
+      body = `<p class="small muted pw-note">По очереди: ${pw} из ${n} в неделю.</p><ol class="rt" aria-label="Очередь тренировок по неделям">${rows.join("")}</ol>${R > 4 ? `<p class="small muted">…и снова по кругу.</p>` : ""}
+        <p class="small muted">Круг — ${numW(R, "неделя", "недели", "недель")}, потом снова ${weekDays(qi)[0]}.</p>`;
+    }
+    return `<section class="card rot-card"><h3>${icon("repeat", 20)}Тренировок в неделю</h3>${seg}${body}</section>`;
+  }
+  /** Что получится при чередовании: «A и B на первой неделе, C и D — на второй, потом снова по кругу». */
+  function rotPhrase(n, pw) {
+    if (pw >= n) return `все тренировки каждую неделю.`;
+    const D = PG.LETTERS.slice(0, n).split(""), R = n / gcd(n, pw), ORD = ["первой", "второй", "третьей", "четвёртой", "пятой", "шестой"];
+    const wk = (i) => andList(Array.from({ length: pw }, (_, j) => D[(i * pw + j) % n]));
+    const shown = Math.min(R, 3), parts = Array.from({ length: shown }, (_, i) => `${wk(i)}${i ? " —" : ""} на ${ORD[i]}`);
+    return `${parts.join(", ")} неделе${R > shown ? ", и так далее" : ""}, потом снова по кругу.`;
+  }
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
   function planSched(ctx) {
     return `${undoBanner()}
+      ${isCustom() ? rotCard(ctx) : ""}
       <section class="card">
         <h3>${icon("calendar", 20)}Дни тренировок</h3>
         <div class="week-grid" role="group" aria-label="Дни тренировок">${weekGrid()}</div>
@@ -1599,13 +1787,13 @@
         ${multi || opt.length ? `<div class="vol-ctl">${multi ? `<div class="seg" role="group" aria-label="Блок">${blocks().map((b) => `<button data-volblock="${b.id}" class="${state.volBlock === b.id ? "on" : ""}" aria-pressed="${state.volBlock === b.id}">Блок&nbsp;${b.id}</button>`).join("")}</div>` : ""}
           ${opt.length ? `<label class="chk"><input type="checkbox" data-volsat="1" ${state.volSat ? "checked" : ""}> с ${opt.map((x) => `тренировкой ${x}`).join(" и ")}</label>` : ""}</div>` : ""}
         ${volumeChart(state.volBlock, state.volSat || !opt.length)}
-        <p class="small muted" style="margin-top:8px">Рабочие подходы в неделю${days().some((d) => (sessOf(`${state.volBlock}${d}`) || { groups: [] }).groups.some((g) => g.tier === "std" || g.tier === "max")) ? " в режиме 90 минут" : ""}, с учётом твоих правок. Косвенная работа (например, бицепс в подтягиваниях) считается за половину подхода — такой счёт точнее всего предсказывает рост. <span class="src-l">Источник: ${rich("{pelland26}")}</span></p>
+        <p class="small muted" style="margin-top:8px">Рабочие подходы ${isCustom() && rotNow() ? "в среднем за неделю круга (тренировки идут по очереди)" : "в неделю"}${days().some((d) => (sessOf(`${state.volBlock}${d}`) || { groups: [] }).groups.some((g) => g.tier === "std" || g.tier === "max")) ? " в режиме 90 минут" : ""}, с учётом твоих правок. Косвенная работа (например, бицепс в подтягиваниях) считается за половину подхода — такой счёт точнее всего предсказывает рост. <span class="src-l">Источник: ${rich("{pelland26}")}</span></p>
       </section>`;
     if (isCustom()) {
       // своя программа: описание и объём; блоков, навыков, целей и «Как это устроено» нет
       const rec = curRec(), n = days().length;
       return `
-      <p class="muted about-lead">${n}&nbsp;${plural(n, "тренировка", "тренировки", "тренировок")} в неделю: ${days().map((d) => `${d} — «${esc(sessOf(`1${d}`).title)}»`).join(", ")}. Недели идут подряд, неделя закрывается, когда сделаны все тренировки с упражнениями.</p>
+      <p class="muted about-lead">${n}&nbsp;${plural(n, "тренировка", "тренировки", "тренировок")}${rotNow() ? `, ${rotNow().pw}&nbsp;в&nbsp;неделю по очереди` : " в неделю"}: ${days().map((d) => `${d} — «${esc(sessOf(`1${d}`).title)}»`).join(", ")}. Недели идут подряд, неделя закрывается, когда сделаны ${rotNow() ? "тренировки её очереди" : "все тренировки"} с упражнениями.</p>
       <h2 class="sec-h">${icon("book-open", 18)}<span>Описание</span></h2>
       <section class="card about-note">${rec.note ? `<p>${esc(rec.note)}</p>` : `<p class="muted">Описания пока нет — для чего эта программа, на сколько недель, что важно.</p>`}
         <button class="btn ghost" data-pedit="note">${icon("pencil", 18)}${rec.note ? "Изменить описание" : "Добавить описание"}</button></section>
@@ -1714,7 +1902,7 @@
   }
   function openSheet(kind, o, fromSel) {
     const el = $("#sheet");
-    if (!SH.open) Object.assign(SH, { fromSel: fromSel || null, snap: PM.snapshot(), daySnap: S.get("daySw", null), changed: false, msg: "", stack: [], added: 0 });
+    if (!SH.open) Object.assign(SH, { fromSel: fromSel || null, snap: PM.snapshot(), daySnap: S.get("daySw", null), tmSnap: curRec() ? (curRec().tm || null) : undefined, changed: false, msg: "", stack: [], added: 0 });
     if (state.qe) { state.qe = null; render(); }
     hideToast(); // тост не лежит поверх шторки
     Object.assign(SH, { open: true, kind, o: Object.assign({}, o), q: "", top: true });
@@ -1729,13 +1917,15 @@
   /** msg === false — закрыть молча; иначе показать сообщение с отменой (по умолчанию — откат к состоянию на момент открытия). */
   function closeSheet(msg, undo) {
     if (!SH.open) return;
-    const el = $("#sheet"), snap = SH.snap, daySnap = SH.daySnap;
+    const el = $("#sheet"), snap = SH.snap, daySnap = SH.daySnap, tmSnap = SH.tmSnap, recId = BOUND;
     SH.open = false; el.classList.remove("open"); document.body.classList.remove("sheet-on");
     dropGuard();
     setTimeout(() => { if (!SH.open) { el.hidden = true; $("#sheetBody").innerHTML = ""; } }, 240);
     render();
     const rev = PM.rev();
-    if (msg !== false && (msg || SH.changed)) toast(msg || SH.msg || "Изменения сохранены", undo || (() => { if (restorePlan(snap, rev)) { S.set("daySw", daySnap); render(); } }));
+    // отмена шторки возвращает и максимумы (шторка цикла нагрузки), если они менялись
+    const tmBack = () => { const r = recId === BOUND && curRec(); if (r && tmSnap !== undefined && JSON.stringify(r.tm || null) !== JSON.stringify(tmSnap)) { const n = PG.patch(r, {}); if (tmSnap) n.tm = tmSnap; else delete n.tm; saveRec(n); } };
+    if (msg !== false && (msg || SH.changed)) toast(msg || SH.msg || "Изменения сохранены", undo || (() => { if (restorePlan(snap, rev)) { S.set("daySw", daySnap); tmBack(); render(); } }));
     const back = SH.fromSel && document.querySelector(SH.fromSel);
     if (back) back.focus({ preventScroll: true });
     state.flash = null;
@@ -1743,7 +1933,7 @@
   function sheetChanged(msg) { SH.changed = true; if (msg) SH.msg = msg; SH.top = false; render(); renderSheet(); }
   function renderSheet() {
     const fn = { item: sheetItem, group: sheetGroup, replace: sheetReplace, swapwith: sheetSwapWith, add: sheetAdd, addplace: sheetAddPlace, day: sheetDay, copy: sheetCopy, prog: sheetProg, account: sheetAccount, eq: sheetEq,
-      pedit: sheetPEdit, pswitch: sheetPSwitch, pnew: sheetPNew, ptpl: sheetPTpl, pnew2: sheetPNew2, wdpick: sheetWdPick, grpick: sheetGrPick }[SH.kind];
+      pedit: sheetPEdit, pswitch: sheetPSwitch, cyc: sheetCyc, tm: sheetTm, pnew: sheetPNew, ptpl: sheetPTpl, pnew2: sheetPNew2, wdpick: sheetWdPick, grpick: sheetGrPick }[SH.kind];
     const out = fn ? fn(SH.o) : null;
     if (!out) { closeSheet(SH.changed ? undefined : false); return; }
     $("#sheetTitle").textContent = out.title;
@@ -2182,28 +2372,95 @@
       <p class="small muted sh-help">Шаг 1 из 2 — с чего начать.</p>
       <div class="sh-col">
         ${row("blank", "plus", "С нуля", "пустые тренировки — соберёшь сам: 1–6 в неделю")}
-        ${row("tpl", "sparkles", "Из шаблона", "3 шаблона: фулбоди, верх/низ, тяни-толкай-ноги")}
+        ${row("tpl", "sparkles", "Из шаблона", `${PG.TEMPLATES.length} шаблонов: от фулбоди до силовых циклов`)}
         ${row("copy", "copy", "Копия текущей", `«${esc(progName(BOUND))}» со всеми правками и расписанием`)}
       </div>` };
   }
   /** Список шаблонов: описание и состав по дням. */
+  const TPL_GRP = [["simple", "Простые"], ["rot", "С чередованием"], ["cyc", "С циклом нагрузки"]];
   function sheetPTpl() {
-    const cards = PG.TEMPLATES.map((x) => `<button class="pk tpl" data-sa="pntpl" data-v="${x.id}"><span class="tpl-t"><b>${esc(x.name)}</b><small>${esc(x.note)}</small>
-      <span class="tpl-days">${x.days.map((d, i) => `<span class="tpl-d">${dayTile(PG.LETTERS[i], "sm")}<span><b>${esc(d.t)}</b> — ${esc(d.ex.slice(0, 3).map((e) => exName(e[0])).join(", "))}${d.ex.length > 3 ? ` и ещё ${d.ex.length - 3}` : ""}</span></span>`).join("")}</span></span>${icon("chevron-right", 20)}</button>`).join("");
-    return { title: "Шаблоны", html: `<p class="small muted sh-help">Упражнения и подходы можно поменять потом — это обычная своя программа.</p><div class="tpl-list">${cards}</div>` };
+    const tags = (x) => {
+      const out = [], n = x.days.length, mx = Math.max(0, ...[].concat(...x.days.map((d) => d.ex.map((e) => (e[5] ? e[5].length : 0)))));
+      out.push(x.rot ? `${x.rot.pw}&nbsp;в&nbsp;неделю` : `${n}&nbsp;в&nbsp;неделю`);
+      if (x.rot) out.push("чередование");
+      if (mx) out.push(`цикл ${mx}&nbsp;${plural(mx, "шаг", "шага", "шагов")}`);
+      return `<span class="tags tpl-tags">${out.map((t) => `<span class="tag">${t}</span>`).join("")}</span>`;
+    };
+    // коротко: название, теги, описание и ряд тренировок; состав по упражнениям — на шаге 2 («Состав»)
+    const card = (x) => `<button class="pk tpl" data-sa="pntpl" data-v="${x.id}"><span class="tpl-t"><b>${nbd(x.name)}</b>${tags(x)}<small>${esc(x.note)}</small>
+      <span class="tpl-row">${x.days.map((d, i) => `<span class="tpl-n">${dayTile(PG.LETTERS[i], "sm")}<span>${esc(d.t)}</span></span>`).join("")}</span></span>${icon("chevron-right", 20)}</button>`;
+    const secs = TPL_GRP.map(([g, h]) => { const l = PG.TEMPLATES.filter((x) => x.grp === g); return l.length ? `<h3 class="sec-h tpl-h"><span>${h}</span></h3><div class="tpl-list">${l.map(card).join("")}</div>` : ""; }).join("");
+    return { title: "Шаблоны", html: `<p class="small muted sh-help">Упражнения и подходы можно поменять потом — это обычная своя программа.</p>${secs}` };
   }
   /** Новая программа, шаг 2: название и (для «с нуля») число тренировок. */
   function sheetPNew2(o) {
     const tpl = o.kind === "tpl" ? PG.TEMPLATES.find((x) => x.id === o.tpl) : null;
     if (o.name == null) o.name = uniqName(o.kind === "copy" ? `${progName(BOUND)} (копия)` : tpl ? tpl.name : "Моя программа");
     if (o.n == null) o.n = 3;
-    const what = o.kind === "copy" ? `Копия «${esc(progName(BOUND))}»${isCustom() ? "" : " — блоки и недели как у «Апгрейда», правки и расписание свои"}.` : tpl ? `Шаблон «${esc(tpl.name)}»: ${tpl.days.length} ${plural(tpl.days.length, "тренировка", "тренировки", "тренировок")} — ${tpl.days.map((d) => esc(d.t)).join(", ")}.` : "Тренировки будут пустыми — добавишь упражнения сам.";
+    if (o.pw == null || o.pw > o.n) o.pw = o.n;
+    const what = o.kind === "copy" ? `Копия «${esc(progName(BOUND))}»${isCustom() ? "" : " — блоки и недели как у «Апгрейда», правки и расписание свои"}.` : tpl ? `Шаблон «${esc(tpl.name)}»: ${tpl.days.length} ${plural(tpl.days.length, "тренировка", "тренировки", "тренировок")} — ${tpl.days.map((d) => esc(d.t)).join(", ")}${tpl.rot ? `; ${tpl.rot.pw} в неделю по очереди` : ""}.` : "Тренировки будут пустыми — добавишь упражнения сам.";
     return { title: "Новая программа", html: `
       <p class="small muted sh-help">Шаг 2 из 2. ${what}</p>
+      ${tpl ? `<details class="tpl-comp"><summary>Состав${icon("chevron-down", 18)}</summary><div class="tpl-days">${tpl.days.map((d, i) => `<span class="tpl-d">${dayTile(PG.LETTERS[i], "sm")}<span><b>${esc(d.t)}</b> — ${esc(d.ex.map((e) => exName(e[0])).join(", "))}</span></span>`).join("")}</div></details>` : ""}
       <div class="fld col"><label class="fl" for="shPNew">Название</label><input id="shPNew" class="inp" data-pf="newname" data-cnt="${PG.NAME_MAX}" value="${esc(o.name)}" maxlength="${PG.NAME_MAX}" autocomplete="off" enterkeyhint="done"><span class="small muted cnt" aria-live="polite">${o.name.length} / ${PG.NAME_MAX}</span></div>
-      ${o.kind === "blank" ? `<div class="fld pn-n"><span class="fl">Тренировок в неделю</span><div class="stepper"><button data-sa="pnn" data-v="-1" aria-label="Меньше тренировок" ${o.n <= 1 ? "disabled" : ""}>${icon("minus", 20)}</button><b aria-live="polite">${o.n}</b><button data-sa="pnn" data-v="1" aria-label="Больше тренировок" ${o.n >= PG.MAX_DAYS ? "disabled" : ""}>${icon("plus", 20)}</button></div></div>
-        <p class="small muted">${o.n === 1 ? "Тренировка A" : `Тренировки ${PG.LETTERS.slice(0, o.n).split("").join(", ")}`}. Добавить или удалить можно и потом.</p>` : ""}
+      ${o.kind === "blank" ? `<div class="fld pn-n"><span class="fl">Тренировок в программе</span><div class="stepper"><button data-sa="pnn" data-v="-1" aria-label="Меньше тренировок" ${o.n <= 1 ? "disabled" : ""}>${icon("minus", 20)}</button><b aria-live="polite">${o.n}</b><button data-sa="pnn" data-v="1" aria-label="Больше тренировок" ${o.n >= PG.MAX_DAYS ? "disabled" : ""}>${icon("plus", 20)}</button></div></div>
+        <div class="fld pn-n"><span class="fl">Тренировок в неделю</span><div class="stepper"><button data-sa="pnpw" data-v="-1" aria-label="Меньше в неделю" ${o.pw <= 1 ? "disabled" : ""}>${icon("minus", 20)}</button><b aria-live="polite">${o.pw}</b><button data-sa="pnpw" data-v="1" aria-label="Больше в неделю" ${o.pw >= o.n ? "disabled" : ""}>${icon("plus", 20)}</button></div></div>
+        <p class="small muted pn-what">${o.pw >= o.n ? `${o.n === 1 ? "Тренировка A" : `Тренировки ${andList(PG.LETTERS.slice(0, o.n).split(""))}`} — каждую неделю.` : Cap(rotPhrase(o.n, o.pw))} Добавить или удалить тренировки можно и потом.</p>` : ""}
       <div class="sh-add2"><button class="btn primary" data-sa="pnewdo" data-v="go">${icon("check", 20)}Создать и перейти</button><button class="btn" data-sa="pnewdo" data-v="only">Только создать</button></div>` };
+  }
+  /* --- цикл нагрузки упражнения своей программы: заготовки, шаги, максимум --- */
+  const CYC_PRE = {
+    lin4: ["Линейный · 4", [{ sets: 4, reps: "8", pct: 70 }, { sets: 4, reps: "6", pct: 75 }, { sets: 4, reps: "5", pct: 80 }, { sets: 3, reps: "3", pct: 87.5 }]],
+    wave3: ["Волна · 3", [{ sets: 3, reps: "8", pct: 72.5 }, { sets: 3, reps: "5", pct: 80 }, { sets: 3, reps: "3", pct: 87.5 }]],
+    dl4: ["С разгрузкой · 4", [{ sets: 3, reps: "8", rir: "3" }, { sets: 3, reps: "8", rir: "2" }, { sets: 3, reps: "8", rir: "1" }, { sets: 2, reps: "8", rir: "4" }]],
+    hl2: ["Тяжёлая / лёгкая · 2", [{ sets: 4, reps: "4–6", rir: "1" }, { sets: 3, reps: "10–12", rir: "3" }]]
+  };
+  /** Максимум упражнения своей программы: kg — число или null (убрать). */
+  function saveTm(exId, kg) { const rec = curRec(); if (!rec) return; const r = PG.setTm(rec, exId, kg); if (!r.error) saveRec(r.rec); }
+  const parseKg = (v) => { const n = numOf(v); return n != null && n >= 1 && n <= 1000 ? Math.round(n * 2) / 2 : null; };
+  function sheetCyc(o) {
+    const it = PM.item(o.key, o.gi, o.ii);
+    if (!cycOk(it)) return null;
+    const exId = it.ex, ex = EX[exId] || {}, sec = ex.unit === "sec", c = it.cyc;
+    const lead = `<p class="small sh-help">Нагрузка меняется по шагам: каждый раз, когда сделал эту тренировку, — следующий шаг, после последнего — снова первый.</p>`;
+    const chips = `<div class="chips wrap cyc-pre" role="group" aria-label="Заготовки">${Object.keys(CYC_PRE).map((k) => `<button class="chip" data-sa="cycpre" data-v="${k}">${CYC_PRE[k][0]}</button>`).join("")}</div>`;
+    if (!c) return { title: `Цикл нагрузки: ${exName(exId)}`, html: `${lead}<p class="small muted">Выбери заготовку — шаги потом можно поправить.</p>${chips}
+      <div class="sh-col"><button class="btn sh-row" data-sa="cycown">${icon("plus", 22)}<span>Свои шаги<small>два шага из текущей схемы ${esc(stepTxt(it))} — дальше правишь</small></span></button></div>` };
+    const cs = cycStep(it, { day: o.key[1], plan: true }), tm = tmOf(exId), anyPct = c.some((x) => x.pct != null);
+    const MI = icon("minus", 20), PL = icon("plus", 20);
+    const rows = c.map((x, i) => {
+      const kg = x.pct != null && tm ? PG.stepWeight(x.pct, tm) : null, on = o.open === i;
+      const txt = `${i + 1} · ${x.sets} × ${x.reps}${x.pct != null ? ` · ${fmtW(x.pct)} %${kg != null ? ` · ${fmtW(kg)} кг` : ""}` : ""}${x.rir != null ? ` · запас ${x.rir}` : ""}`;
+      const head = `<button class="cyc-row${on ? " on" : ""}" data-sa="cycstep" data-v="${i}" aria-expanded="${on}"><span class="cyc-t">${esc(txt)}</span>${i === cs.i ? `<span class="tag now">сейчас</span>` : ""}${icon(on ? "chevron-up" : "chevron-down", 18)}</button>`;
+      if (!on) return `<li>${head}</li>`;
+      const pct = x.pct;
+      const pctRow = `<div class="qe-r"><span class="fl">% от максимума</span><div class="stepper"><button data-sa="cs_pct" data-v="${pct == null ? "" : Math.max(30, pct - 2.5)}" data-qb="p-" aria-label="Меньше процент" ${pct == null || pct <= 30 ? "disabled" : ""}>${MI}</button><b aria-live="polite">${pct == null ? "—" : fmtW(pct)}</b><button data-sa="cs_pct" data-v="${pct == null ? 70 : Math.min(110, pct + 2.5)}" data-qb="p+" aria-label="Больше процент" ${pct != null && pct >= 110 ? "disabled" : ""}>${PL}</button></div></div>
+        ${pct != null ? `<button class="lnk small" data-sa="cs_pct" data-v="">${icon("x", 16)}без процента</button>` : `<p class="small muted">Необязательно: с процентом вес шага посчитается от максимума.</p>`}`;
+      return `<li>${head}<div class="cyc-ed">${qeHTML(x, { attr: "sa", act: { sets: "cs_sets", reps: "cs_reps", rir: "cs_rir" }, sec, tid: "shCycReps", tfield: 'data-sf="cyreps"', presets: true })}${pctRow}
+        <button class="btn sh-row danger cyc-del" data-sa="cycdel" ${c.length <= PM_MIN ? "disabled" : ""}>${icon("trash", 22)}<span>Удалить шаг<small>${c.length <= PM_MIN ? "шагов не меньше двух" : `шаг ${i + 1}`}</small></span></button></div></li>`;
+    }).join("");
+    const tmFld = anyPct ? `<div class="fld col cyc-tm"><label class="fl" for="shTm">Максимум, кг</label><input id="shTm" class="inp" inputmode="decimal" data-sf="tm" value="${tm ? fmtW(tm) : ""}" placeholder="например, 100" autocomplete="off" enterkeyhint="done"><span class="small muted">Лучший вес на 1 повтор; от него считаются проценты.</span></div>` : "";
+    return { title: `Цикл нагрузки: ${exName(exId)}`, html: `${lead}${tmFld}
+      <ol class="cyc-list" aria-label="Шаги">${rows}</ol>
+      <button class="btn wide cyc-add" data-sa="cycadd" ${c.length >= PM_MAX ? "disabled" : ""}>${icon("plus", 20)}Добавить шаг</button>
+      <details class="cyc-premore"><summary>Заменить шаги заготовкой${icon("chevron-down", 18)}</summary>${chips}</details>
+      <div class="sh-col"><button class="btn sh-row danger" data-sa="cycoff">${icon("x", 22)}<span>Убрать цикл<small>останется обычная схема — шаг 1</small></span></button></div>` };
+  }
+  const PM_MIN = PG.CYC_MIN, PM_MAX = PG.CYC_MAX;
+  /** «Указать максимум» с «Сегодня»: одно поле. */
+  function sheetTm(o) {
+    if (!isCustom()) return null;
+    const tm = tmOf(o.ex);
+    return { title: `Максимум: ${exName(o.ex)}`, html: `
+      <div class="fld col"><label class="fl" for="shTm2">Максимум, кг</label><input id="shTm2" class="inp" inputmode="decimal" data-tmf="1" value="${tm ? fmtW(tm) : ""}" placeholder="например, 100" autocomplete="off" enterkeyhint="done">
+        <span class="small muted">Лучший вес на 1 повтор; от него считаются проценты шагов.</span></div>
+      <div class="sh-add2"><button class="btn primary" data-sa="tmsave">${icon("check", 20)}Сохранить</button>${tm ? `<button class="btn" data-sa="tmdel">Убрать</button>` : `<button class="btn" data-sa="close">Отмена</button>`}</div>` };
+  }
+  function saveTmSheet() {
+    const f = $("#shTm2"), ex = SH.o.ex, old = tmOf(ex), kg = parseKg(f ? f.value : "");
+    if (kg == null) { toast("Нужен вес от 1 до 1000 кг"); if (f) f.focus(); return; }
+    saveTm(ex, kg);
+    closeSheet(`Максимум «${exName(ex)}» — ${fmtW(kg)} кг`, () => { saveTm(ex, old); render(); });
   }
   function sheetCopy(o) {
     const s = sessOf(o.key);
@@ -2258,8 +2515,10 @@
     const n = PM.replace(o.key, o.gi, o.ii, o.v || "", exId, o.scope === "all");
     if (o.mode === "today") setDaySwap(o.key[1], planned, null);
     const msg = o.scope === "all" ? `«${exName(exId)}» вместо «${exName(planned)}» — ${n} ${plural(n, "место", "места", "мест")}` : `«${exName(exId)}» вместо «${exName(planned)}» в ${slotName(o.key, "dat")}`;
+    // цикл нагрузки остаётся у пункта; проценты без максимума нового упражнения — напомнить
+    const it2 = PM.item(o.key, o.gi, o.ii), cycNote = isCustom() && it2 && Array.isArray(it2.cyc) && it2.cyc.some((x) => x.pct != null) && !tmOf(exId) ? ". Цикл нагрузки сохранён — укажи максимум" : "";
     SH.changed = true; // после выбора шторка закрывается; «Отменить» в тосте вернёт всё, как было при её открытии
-    closeSheet(msg);
+    closeSheet(msg + cycNote);
   }
   /* ---------- программы: создать, перейти, удалить, тренировки своей программы ---------- */
   /** Источник копии: встроенная — её правки (plan) и расписание (settings.days); своя — запись. */
@@ -2272,7 +2531,7 @@
     let rec = null;
     const tpl = o.kind === "tpl" ? PG.TEMPLATES.find((x) => x.id === o.tpl) : null, src = o.kind === "copy" ? srcOf(o.from || BOUND) : null;
     const name = uniqName(o.name || (tpl ? tpl.name : src ? `${src.name || "Апгрейд"} (копия)` : "Моя программа"));
-    if (o.kind === "blank") rec = PG.blank({ name, n: o.n });
+    if (o.kind === "blank") rec = PG.blank({ name, n: o.n, pw: o.pw });
     else if (tpl) rec = PG.fromTemplate(tpl, { name, version: BUILTIN.meta.version });
     else if (src) rec = PG.copyOf(src, { name });
     if (!rec) { toast("Не получилось создать программу"); return null; }
@@ -2354,27 +2613,34 @@
     return Array.from(out);
   }
   /** «＋ Добавить тренировку» в своей программе: первая свободная буква без записей этой недели, сразу экран новой тренировки. */
+  /* Смена правил своей программы (в неделю, добавить или удалить тренировку) не переписывает прошлое: новые правила — с недели,
+     которую показывает «Сегодня» (qa), очередь этой недели начинается с её прежней первой буквы (Programs.rebase). */
+  const rebased = (old, next) => PG.rebase(old, next, qIdx());
+  /** Правила (rot, qa) — как в записи src: для отмены. */
+  function keepRules(next, src) { const n = Object.assign({}, next); if (src.rot) n.rot = src.rot; else delete n.rot; if (src.qa != null) n.qa = src.qa; else delete n.qa; return n; }
+  /** « Очередь с этой недели: C, D, A» — если у программы уже есть записи и тренировки идут по очереди. */
+  const queueNote = () => (rotNow() && Object.keys(state.logs).some((k) => mineK(k) && entryHasData(state.logs[k])) ? ` Очередь с этой недели: ${weekDays(qIdx()).join(", ")}.` : "");
   function addDayAct() {
     const rec = curRec(); if (!rec) return;
     const r = PG.addDay(rec, null, busyLetters());
     if (r.error) { toast(`Не получилось: ${r.error}`); return; }
-    saveRec(r.rec); bindProgram();
+    saveRec(rebased(rec, r.rec)); bindProgram();
     planGo("sess", { b: 1, d: r.d });
-    toast(`Добавлена тренировка ${r.d}`, () => { const cur = progsAll()[rec.id]; if (!cur || cur.id !== BOUND) return; const back = PG.removeDay(cur, r.d); if (!back.error) { saveRec(back.rec); bindProgram(); planGo("hub"); } });
+    toast(`Добавлена тренировка ${r.d}.${queueNote()}`, () => { const cur = progsAll()[rec.id]; if (!cur || cur.id !== BOUND) return; const back = PG.removeDay(cur, r.d); if (!back.error) { saveRec(keepRules(back.rec, rec)); bindProgram(); planGo("hub"); } });
   }
   /** Удалить тренировку своей программы: журнал остаётся; отмена возвращает эту тренировку (содержимое, название, день недели). */
   function removeDayAct(d) {
     const rec = curRec(); if (!rec) return;
     const r = PG.removeDay(rec, d);
     if (r.error) { toast(`Не получилось: ${r.error}`); return; }
-    saveRec(r.rec); bindProgram();
+    saveRec(rebased(rec, r.rec)); bindProgram();
     if (state.day === d) state.day = resetDay();
     planGo("hub");
-    toast(`Тренировка ${d} удалена`, () => {
+    toast(`Тренировка ${d} удалена.${queueNote()}`, () => {
       const cur = progsAll()[rec.id]; if (!cur) return;
       const back = PG.restoreDay(cur, r.removed);
       if (back.error) { toast(`Не получилось отменить: ${back.error}`); return; }
-      saveRec(back.rec); if (rec.id === BOUND) { bindProgram(); planGo("hub"); } else render();
+      saveRec(keepRules(back.rec, rec)); if (rec.id === BOUND) { bindProgram(); planGo("hub"); } else render();
     });
   }
   function sheetAction(t) {
@@ -2474,10 +2740,11 @@
     if (SH.kind === "pnew" && a === "pnkind") { if (v === "tpl") sheetGo("ptpl", {}); else sheetGo("pnew2", { kind: v }); return; }
     if (SH.kind === "ptpl" && a === "pntpl") { sheetGo("pnew2", { kind: "tpl", tpl: v }); return; }
     if (SH.kind === "pnew2") {
-      if (a === "pnn") { o.n = Math.max(1, Math.min(PG.MAX_DAYS, (o.n || 3) + +v)); SH.top = false; renderSheet(); focusSel(`#sheet [data-sa="pnn"][data-v="${v}"]`, '#sheet [data-sa="pnn"]'); return; }
+      if (a === "pnn") { const was = o.n; o.n = Math.max(1, Math.min(PG.MAX_DAYS, (o.n || 3) + +v)); if (o.pw >= was || o.pw > o.n) o.pw = o.n; SH.top = false; renderSheet(); focusSel(`#sheet [data-sa="pnn"][data-v="${v}"]`, '#sheet [data-sa="pnn"]'); return; }
+      if (a === "pnpw") { o.pw = Math.max(1, Math.min(o.n, (o.pw || o.n) + +v)); SH.top = false; renderSheet(); focusSel(`#sheet [data-sa="pnpw"][data-v="${v}"]`, '#sheet [data-sa="pnpw"]'); return; }
       if (a === "pnewdo") {
         const f = $("#shPNew"); if (f) o.name = f.value;
-        const rec = createProgram({ kind: o.kind, tpl: o.tpl, n: o.n, name: o.name, from: BOUND });
+        const rec = createProgram({ kind: o.kind, tpl: o.tpl, n: o.n, pw: o.pw, name: o.name, from: BOUND });
         if (!rec) return;
         closeSheet(false);
         if (v === "go") doSwitch(rec.id);
@@ -2485,6 +2752,8 @@
         return;
       }
     }
+    if (SH.kind === "tm") { if (a === "tmsave") { saveTmSheet(); return; } if (a === "tmdel") { const ex = o.ex, old = tmOf(ex); saveTm(ex, null); closeSheet("Максимум убран", () => { saveTm(ex, old); render(); }); return; } return; }
+    if (SH.kind === "cyc") { cycAction(a, v, t); return; }
     // тренировка целиком
     if (SH.kind === "day") {
       const name = slotName(o.key);
@@ -2570,6 +2839,29 @@
       if (a === "gremove") { PM.removeGroup(o.key, o.gi); SH.changed = true; closeSheet("Связка убрана"); return; }
     }
   }
+  /** Действия шторки цикла нагрузки: каждая правка — сразу в программу (отмена — в тосте после закрытия). */
+  function cycAction(a, v, t) {
+    const o = SH.o, it = PM.item(o.key, o.gi, o.ii);
+    if (!cycOk(it)) { closeSheet(); return; }
+    const steps = it.cyc ? JSON.parse(JSON.stringify(it.cyc)) : null, set = (c) => { if (PM.setCyc(o.key, o.gi, o.ii, c)) SH.changed = true; };
+    if (a === "cycpre" && CYC_PRE[v]) { set(CYC_PRE[v][1]); o.open = null; SH.msg = `Цикл нагрузки: ${CYC_PRE[v][0]}`; }
+    else if (a === "cycown") { const b = { sets: it.sets || 3, reps: it.reps || "8–12" }; if (it.rir != null && it.rir !== "") b.rir = it.rir; set([b, Object.assign({}, b)]); o.open = 1; }
+    else if (a === "cycstep") o.open = o.open === +v ? null : +v;
+    else if (a === "cycadd" && steps) { steps.push(Object.assign({}, steps[steps.length - 1])); set(steps); o.open = steps.length - 1; }
+    else if (a === "cycdel" && steps && o.open != null && steps.length > PM_MIN) { steps.splice(o.open, 1); set(steps); o.open = null; }
+    else if (a === "cycoff") { set(null); closeSheet("Цикл нагрузки убран"); return; }
+    else if (/^cs_/.test(a) && steps && o.open != null && steps[o.open]) {
+      const st = steps[o.open];
+      if (a === "cs_sets") st.sets = Math.max(1, Math.min(10, (st.sets || 1) + +v));
+      else if (a === "cs_reps") st.reps = v;
+      else if (a === "cs_rir") { if (v) st.rir = v; else delete st.rir; }
+      else if (a === "cs_pct") { if (v === "") delete st.pct; else st.pct = +v; }
+      set(steps);
+    } else return;
+    SH.top = false; render(); renderSheet();
+    if (t && (t.dataset.qb || a === "cs_reps" || a === "cs_rir")) refocusQe(t, "#sheetBody");
+    else if (a === "cycstep") focusSel(`#sheet [data-sa="cycstep"][data-v="${v}"]`);
+  }
   function sheetField(t) {
     const o = SH.o, f = t.dataset.sf, af = t.dataset.af;
     const mark = () => { const box = t.closest(".fld"); if (box) box.querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c.dataset.v === normDash(t.value.trim()))); };
@@ -2578,6 +2870,12 @@
     if (!f) return;
     if (SH.kind === "day") {
       if (f === "title") { PM.setTitle(o.key, t.value); SH.changed = true; SH.msg = t.value.trim() ? "Тренировка переименована" : "Название — как в программе"; afterTap(() => { render(); if (SH.open && SH.kind === "day") { SH.top = false; renderSheet(); } }); }
+      return;
+    }
+    if (SH.kind === "cyc") {
+      const o2 = SH.o, it = PM.item(o2.key, o2.gi, o2.ii); if (!cycOk(it) || !it.cyc) return;
+      if (f === "tm") { const kg = t.value.trim() ? parseKg(t.value) : null; if (t.value.trim() && kg == null) { toast("Нужен вес от 1 до 1000 кг"); return; } saveTm(it.ex, kg); SH.changed = true; redraw("cyc"); render(); }
+      if (f === "cyreps" && o2.open != null) { const c = JSON.parse(JSON.stringify(it.cyc)); if (t.value.trim()) { c[o2.open].reps = t.value.trim(); if (PM.setCyc(o2.key, o2.gi, o2.ii, c)) SH.changed = true; render(); redraw("cyc"); } }
       return;
     }
     if (SH.kind === "group") { if (f === "rest") { PM.setGroup(o.key, o.gi, { rest: t.value }); SH.changed = true; render(); mark(); } return; }
@@ -2617,6 +2915,7 @@
       if (e.key !== "Enter" || !e.target.matches(".inp") || e.target.tagName === "TEXTAREA") return;
       e.preventDefault(); e.target.blur();
       if (e.target.dataset.pf === "name" && SH.kind === "pedit") { savePField(); return; }
+      if (e.target.dataset.tmf && SH.kind === "tm") { saveTmSheet(); return; }
       // переименование: «Готово» на клавиатуре — название сохранено, шторка закрывается
       if (e.target.dataset.sf === "title" && SH.kind === "day") { PM.setTitle(SH.o.key, e.target.value); SH.changed = true; closeSheet(e.target.value.trim() ? "Тренировка переименована" : "Название — как в программе"); }
     });
@@ -3165,9 +3464,10 @@
     for (let i = from; i <= cyc.idx; i++) { const p = posOfIdx(i); cols.push({ n: by[i] ? by[i].size : 0, block: p.block, week: p.week, cur: i === cyc.idx }); }
     // «тренировок за 4 недели» и «дней с последней» — по всем программам; регулярность по неделям — по текущей
     const last28 = list.filter((x) => daysBetween(x.date, today) < 28).length;
-    const req = custom ? reqDays(1) : ["A", "B"], need = custom ? Math.max(1, req.length) : 2;
+    const req = custom ? reqDays(1, cyc.idx) : ["A", "B"], need = custom ? Math.max(1, req.length) : 2;
     let closed = 0;
-    for (let i = 0; i < cyc.idx; i++) { const s = by[i]; if (s && (custom ? s.size >= need : s.has("A") && s.has("B"))) closed++; }
+    // своя программа: неделя закрыта — сделаны непустые тренировки её очереди (при чередовании у каждой недели своя очередь)
+    for (let i = 0; i < cyc.idx; i++) { const s = by[i]; if (s && (custom ? (PG.softWeek(curRec(), i) ? s.size > 0 : reqDays(1, i).filter((d) => s.has(d)).length >= Math.max(1, reqDays(1, i).length)) : s.has("A") && s.has("B"))) closed++; }
     const since = list.length ? daysBetween(list[0].date, today) : null;
     const MAXN = Math.max(3, days().length), BAR = 56, BASE = 20;
     // подпись столбика — неделя блока; над первой неделей каждого блока — «Б1», «Б2»…; у своей программы — номер недели
@@ -3255,7 +3555,7 @@
     return `<section class="card">
       <h3>${icon("bar-chart", 20)}Подходы по мышцам</h3>
       <div class="chart-ctl"><div class="chips wrap" role="group" aria-label="Неделя">${btn(0, "Текущая")}${btn(1, "Прошлая")}${btn(2, "2 нед. назад")}</div></div>
-      <p class="small muted">${isCustom() ? `Неделя ${pos.n}` : `Блок ${pos.block}, неделя ${pos.week}${isDeload(pos) ? " (разгрузка)" : ""}`}. Полоса — сделано, риска — план${isCustom() ? "" : " в режиме 90 минут"}${opt.length && withOpt ? ` с тренировкой ${opt.join(", ")}` : ""}.</p>
+      <p class="small muted">${isCustom() ? `Неделя ${pos.n}` : `Блок ${pos.block}, неделя ${pos.week}${isDeload(pos) ? " (разгрузка)" : ""}`}. Полоса — сделано, риска — план${isCustom() ? (rotNow() ? " в среднем за неделю" : "") : " в режиме 90 минут"}${opt.length && withOpt ? ` с тренировкой ${opt.join(", ")}` : ""}.</p>
       ${empty ? ban("slim", "В этой неделе программы ещё нет записанных подходов — риски показывают план.", "", "info") : ""}
       <div class="chart" role="img" aria-label="Подходы по мышцам: сделано и план">${bars}</div>
       <p class="small muted" style="margin-top:8px">${isCustom() ? "" : "Жирным — приоритетные мышцы. "}Число справа — сделано / по плану. Прямая работа считается за подход, косвенная (бицепс в тягах) — за половину. <span class="src-l">Источник: ${rich("{pelland26}")}</span></p>
@@ -3342,9 +3642,11 @@
   /** Инструкция агенту под текущую программу: у своей — без блоков и разгрузок. */
   function agentPrompt() {
     if (!isCustom()) return AGENT_PROMPT;
-    const d = days();
+    const d = days(), rot = rotNow();
+    const how = rot ? `${d.length} ${plural(d.length, "тренировка", "тренировки", "тренировок")} (${d.join(", ")}), ${rot.pw} в неделю по очереди (program.rotation); без блоков и разгрузок, недели идут подряд; неделя закрывается, когда сделаны тренировки её очереди`
+      : `${d.length} ${plural(d.length, "тренировка", "тренировки", "тренировок")} в неделю: ${d.join(", ")}; без блоков и разгрузок, недели идут подряд; неделя закрывается, когда сделаны все тренировки с упражнениями`;
     return AGENT_PROMPT.replace("программа силовых тренировок (3 блока по 5 недель, 5-я неделя блока — разгрузка; неделя закрывается, когда сделаны тренировки A и B, C — по желанию)",
-      `своя программа силовых тренировок «${P.meta.name}» (${d.length} ${plural(d.length, "тренировка", "тренировки", "тренировок")} в неделю: ${d.join(", ")}; без блоков и разгрузок, недели идут подряд; неделя закрывается, когда сделаны все тренировки с упражнениями)`)
+      `своя программа силовых тренировок «${P.meta.name}» (${how}; у некоторых упражнений цикл нагрузки — load_cycle)`)
       .replace("Разгрузку или повтор недели предлагай через поле cycle.", "Повтор недели предлагай через поле cycle (repeat_week); блоков и разгрузок в этой программе нет — облегчение предлагай изменениями подходов и запаса.");
   }
   const stripHTML = (h) => String(h || "").replace(/<li>/g, "\n• ").replace(/<\/(h3|p|section)>/g, "\n").replace(/<[^>]+>/g, "").replace(/\{\{?\w+\}?\}/g, "").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n").trim();
@@ -3357,6 +3659,9 @@
       sessions[key] = { title: s.title, edited_by_user: PM.edited(key), groups: s.groups.filter((g) => g.items && g.kind !== "warmup").map((g) => ({ id: g.id, kind: g.kind, tier: g.tier, rest: g.rest || null,
         items: g.items.filter((it) => it.ex || it.hl || it.weekAlt).map((it) => {
           const one = (b) => { if (b.ex) used.add(b.ex); return { exercise: b.ex, sets: b.sets, reps: b.reps, rir: b.rir == null ? null : b.rir, note: b.note || null, myo: !!b.myo, replaced_from: b.orig || undefined }; };
+          // цикл нагрузки: шаги по разу на каждый проход тренировки, текущий — по ближайшему проходу
+          const cs = custom ? cycStep(it, { day: key[1], plan: true }) : null;
+          if (cs) return Object.assign(one(it), { load_cycle: { steps: it.cyc.map((x) => ({ sets: x.sets, reps: x.reps, rir: x.rir == null ? null : x.rir, pct_of_max: x.pct == null ? null : x.pct })), current_step: cs.i + 1, cycles_completed: cs.pass - 1, max_kg: tmOf(it.ex) } }, it.add ? { added_by_user: true } : {});
           if (it.hl) return Object.assign(one({ ex: it.ex, orig: it.orig }), { heavy_week: one(Object.assign({ ex: it.ex }, it.hl.heavy)), light_week: one(Object.assign({ ex: it.ex }, it.hl.light)) });
           if (it.weekAlt) return { alternating_by_week: it.weekAlt.map(one) };
           return Object.assign(one(it), it.add ? { added_by_user: true } : {});
@@ -3400,12 +3705,13 @@
         id: BOUND, name: P.meta.name, kind: progKind() === "main" ? "builtin" : progKind(), note: (curRec() || {}).note || undefined,
         version: P.meta.version,
         workouts: days(), required: days().filter((d) => !optional(d)), optional: opt,
+        rotation: custom && rotNow() ? { per_week: rotNow().pw, queue: days(), this_week: weekDays(cyc.idx), round_weeks: PG.roundWeeks(curRec()), weekdays: rotNow().wd.map((d) => WD_SHORT[d]) } : undefined,
         position: custom ? { cycle: 1, block: 1, week: cur.n, week_index: cyc.idx, deload: false, done_this_week: Object.keys(done), deload_in_weeks: null }
           : { cycle: cur.cycle, block: cur.block, week: cur.week, week_index: cyc.idx, deload: isDeload(cur), done_this_week: Object.keys(done), deload_in_weeks: isDeload(cur) ? 0 : P.meta.blockWeeks - cur.week },
         cycle_history: cyc.hist || [],
         blocks: custom ? [] : P.blocks.map((b) => ({ id: b.id, name: b.name, theme: b.theme, targets: b.targets })),
         sessions, exercises,
-        rules: custom ? "Двойная прогрессия: верх диапазона во всех подходах при нужном RIR → +2,5–5 % веса. Блоков и разгрузок нет, недели идут подряд. Самочувствие «так себе»: подходом меньше, RIR +1."
+        rules: custom ? "Двойная прогрессия: верх диапазона во всех подходах при нужном RIR → +2,5–5 % веса. Блоков и разгрузок нет, недели идут подряд. Цикл нагрузки (load_cycle): каждый раз, когда тренировка сделана, — следующий шаг, после последнего — снова первый (пропуск шаг не сдвигает); вес шага = pct_of_max × max_kg / 100. Самочувствие «так себе»: подходом меньше, RIR +1."
           : "Двойная прогрессия: верх диапазона во всех подходах при нужном RIR → +2,5–5 % веса. Разгрузка: веса −10–15 %, подходов на один меньше, RIR 3–4. Самочувствие «так себе»: подходом меньше, RIR +1."
       },
       adjustments_active: (S.get("adjust", []) || []).filter((a) => a && a.enabled !== false && (a.prog || PG.MAIN) === BOUND),
@@ -3692,6 +3998,9 @@
     const ctx = ctxNow(), entry = todayEntry(ctx);
     const arr = entry.ex[exId] = entry.ex[exId] || [];
     arr[i] = v;
+    // цикл нагрузки: номер шага — в записи дня (по нему потом ищется «прошлый раз на этом шаге»)
+    const sm = todayModel(ctx).items.find((x) => x.r.exId === exId);
+    if (sm && sm.r.step) { entry.st = Object.assign({}, entry.st, { [exId]: sm.r.step.i }); }
     for (let j = 0; j < arr.length; j++) if (!arr[j]) arr[j] = {};
     if (ctx.next) setCycle({ idx: ctx.idx, since: todayISO() }, "auto");
     S.set("logs", state.logs);
@@ -3926,6 +4235,22 @@
       S.set("logs", state.logs); render();
       focusSel(d.finish === "1" ? '[data-finish="0"]' : '[data-finish="1"]');
       if (d.finish === "1") { const c = document.querySelector(".fin-card"); if (c) c.scrollIntoView({ block: "center", behavior: motion() }); }
+      return;
+    }
+    if (d.cycopen) { const [gi, ii] = d.cycopen.split(":").map(Number); state.qe = null; openSheet("cyc", { key: planKey(), gi, ii, open: null }, `.pr-q[data-cycopen="${d.cycopen}"]`); return; }
+    if (d.tmset) { openSheet("tm", { ex: d.tmset }, `[data-tmset="${d.tmset}"]`); focusSel("#shTm2"); return; }
+    if (d.tmup) {
+      const ex = d.tmup, old = tmOf(ex); if (old == null) return;
+      saveTm(ex, Math.min(1000, old + 2.5)); setTmUp(ex, true); render();
+      toast(`Максимум «${exName(ex)}» — ${fmtW(tmOf(ex))} кг`, () => { saveTm(ex, old); setTmUp(ex, false); render(); });
+      return;
+    }
+    if (d.pw) {
+      const rec = curRec(); if (!rec || !isCustom()) return;
+      const r = PG.setRot(rec, +d.pw); if (r.error) { toast(r.error); return; }
+      saveRec(rebased(rec, r.rec)); state.day = resetDay(); render(); focusSel(`[data-pw="${d.pw}"]`);
+      const now = rotNow(), note = queueNote();
+      toast(note ? note.trim() : now ? `${now.pw} в неделю — по очереди` : "Все тренировки каждую неделю", () => { const cur = curRec(); if (!cur) return; saveRec(keepRules(PG.patch(cur, {}), rec)); state.day = resetDay(); render(); });
       return;
     }
     if (d.wcell !== undefined) { openSheet("wdpick", { wd: +d.wcell }, `[data-wcell="${d.wcell}"]`); return; }
@@ -4448,5 +4773,5 @@
     if (needLogin()) openLogin("first");
   });
   window.__UPG = { state, ctxNow, render, planGo, weeklyVolume, resolveItem, estMinutes, groupVisible, suggestDay, LIB, sessOf, get PM() { return PM; }, buildAnalysis,
-    curId, days, plannedDays, switchProgram, createProgram, deleteProgram, progsAll };
+    curId, days, plannedDays, switchProgram, createProgram, deleteProgram, progsAll, weekDays, qIdx, cycleState };
 })();

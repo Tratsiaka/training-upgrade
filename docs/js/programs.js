@@ -24,26 +24,67 @@
   const safeCopy = (o) => { const out = {}; if (isObj(o)) Object.keys(o).forEach((k) => { if (!BAD_KEY[k]) out[k] = o[k]; }); return out; };
 
   /* ---- шаблоны: упражнения встроенной программы, связки одиночные, tier "core" ----
-     [id, подходы, повторы, запас, отдых]; база — запас 2 и отдых 2 мин, изоляция — запас 1 и 60–90 с. */
-  const B = "2 мин", I = "60–90 с";
+     [id, подходы, повторы, запас, отдых, шаги?]; база — запас 2 и отдых 2 мин, изоляция — запас 1 и 60–90 с.
+     шаги — цикл нагрузки: [[подходы, повторы, запас | null, % от максимума | null], …]; схема пункта = шаг 1.
+     grp — раздел в шторке «Шаблоны»: simple, rot (с чередованием, поле rot), cyc (с циклом нагрузки). */
+  const B = "2 мин", I = "60–90 с", H = "3 мин";
+  /* Жимовой цикл: три дня по 8 шагов, шаги идут вместе (по выполнению — каждую неделю все три дня), 8-й — общая разгрузка.
+     Тяжёлый — линейно к пику 92,5 % на 7-м шаге; средний — волна из 4 шагов дважды (пик 80 % на 4-м, на 7-м — только 77,5 %),
+     лёгкий — волна 60–65 %. Пики тяжёлого и среднего не совпадают. */
+  const BENCH8 = [[4, "6", null, 70], [4, "5", null, 75], [4, "4", null, 80], [3, "4", null, 82.5], [3, "3", null, 85], [3, "3", null, 87.5], [2, "2", null, 92.5], [3, "5", null, 60]];
+  const BENCH_MID = [[4, "5", null, 72.5], [4, "4", null, 75], [3, "4", null, 77.5], [3, "3", null, 80], [4, "5", null, 72.5], [4, "4", null, 75], [3, "4", null, 77.5], [3, "5", null, 60]];
+  const BENCH_LIGHT = [[4, "8", null, 60], [4, "7", null, 62.5], [4, "6", null, 65], [4, "8", null, 60], [4, "8", null, 60], [4, "7", null, 62.5], [4, "6", null, 65], [3, "5", null, 60]];
+  const SBD6 = [[5, "5", null, 70], [5, "4", null, 75], [4, "4", null, 80], [4, "3", null, 85], [3, "2", null, 90], [3, "5", null, 60]];
   const TEMPLATES = [
-    { id: "fullbody3", name: "Фулбоди · 3 дня", note: "Всё тело на каждой тренировке, 6 упражнений. Подходит, если тренируешься через день.", wd: [1, 3, 5],
+    { id: "fullbody2", grp: "simple", name: "Всё тело · 2 дня", note: "Две тренировки на всё тело, по 6 упражнений. Для тех, у кого на зал два дня в неделю.", wd: [1, 4],
+      days: [
+        { t: "Всё тело A", ex: [["legpress", 3, "8–12", "2", B], ["bench", 3, "6–10", "2", B], ["cs_row", 3, "8–12", "2", B], ["lat_raise_db", 3, "12–20", "1", I], ["incline_curl", 2, "10–15", "1", I], ["calf_stand", 3, "10–15", "1", I]] },
+        { t: "Всё тело B", ex: [["rdl", 3, "8–10", "2", B], ["seated_db_press", 3, "8–12", "2", B], ["pulldown", 3, "8–12", "2", B], ["bss", 2, "8–12", "2", B], ["pushdown", 2, "10–15", "1", I], ["ab_wheel", 2, "8–12", "1", I]] }] },
+    { id: "fullbody3", grp: "simple", name: "Фулбоди · 3 дня", note: "Всё тело на каждой тренировке, 6 упражнений. Подходит, если тренируешься через день.", wd: [1, 3, 5],
       days: [
         { t: "Всё тело A", ex: [["legpress", 3, "8–12", "2", B], ["bench", 3, "6–10", "2", B], ["cable_row", 3, "8–12", "2", B], ["lat_raise_db", 3, "12–20", "1", I], ["pushdown", 2, "10–15", "1", I], ["rkc_plank", 2, "30–40 с", null, I]] },
         { t: "Всё тело B", ex: [["rdl", 3, "8–10", "2", B], ["seated_db_press", 3, "8–12", "2", B], ["pulldown", 3, "8–12", "2", B], ["incline_curl", 2, "10–15", "1", I], ["calf_stand", 3, "10–15", "1", I], ["deadbug", 2, "6", null, I]] },
         { t: "Всё тело C", ex: [["bss", 3, "8–12", "2", B], ["incline_db", 3, "8–12", "2", B], ["cs_row", 3, "8–12", "2", B], ["face_pull", 2, "15–20", "1", I], ["hammer_curl", 2, "10–12", "1", I], ["oh_ext_cable", 2, "10–15", "1", I]] }] },
-    { id: "upperlower4", name: "Верх / низ · 4 дня", note: "Верх и низ по очереди: каждая мышца — дважды в неделю, 6–7 упражнений за тренировку.", wd: [1, 2, 4, 5],
+    { id: "upperlower4", grp: "simple", name: "Верх / низ · 4 дня", note: "Верх и низ по очереди: каждая мышца — дважды в неделю, 6–7 упражнений за тренировку.", wd: [1, 2, 4, 5],
       days: [
         { t: "Верх 1", ex: [["bench", 3, "6–10", "2", B], ["cs_row", 3, "8–12", "2", B], ["seated_db_press", 3, "8–12", "2", B], ["pulldown", 3, "8–12", "2", B], ["incline_curl", 3, "10–15", "1", I], ["pushdown", 3, "10–15", "1", I]] },
         { t: "Низ 1", ex: [["legpress", 3, "8–12", "2", B], ["rdl", 3, "8–10", "2", B], ["legext", 3, "12–15", "1", I], ["seated_curl", 3, "10–12", "1", I], ["calf_stand", 3, "10–15", "1", I], ["ab_wheel", 3, "8–12", "1", I]] },
         { t: "Верх 2", ex: [["incline_db", 3, "8–12", "2", B], ["pullup", 3, "6–10", "2", B], ["machine_press", 3, "10–12", "2", B], ["cable_row", 3, "10–12", "2", B], ["lat_raise_db", 3, "12–20", "1", I], ["hammer_curl", 2, "10–12", "1", I], ["oh_ext_cable", 2, "10–15", "1", I]] },
         { t: "Низ 2", ex: [["hack", 3, "8–12", "2", B], ["hipthrust", 3, "8–12", "2", B], ["bss", 2, "8–12", "2", B], ["seated_curl", 3, "10–15", "1", I], ["calf_seated", 3, "15–20", "1", I], ["pallof", 3, "10", null, I]] }] },
-    { id: "ppl3", name: "Тяни — толкай — ноги · 3 дня", note: "Жимы, тяги и ноги в разные дни: каждая мышца раз в неделю, зато объёмно.", wd: [1, 3, 5],
+    { id: "ppl3", grp: "simple", name: "Тяни — толкай — ноги · 3 дня", note: "Жимы, тяги и ноги в разные дни: каждая мышца раз в неделю, зато объёмно.", wd: [1, 3, 5],
       days: [
         { t: "Толкай", ex: [["bench", 3, "6–10", "2", B], ["incline_db", 3, "8–12", "2", B], ["seated_db_press", 3, "8–12", "2", B], ["lat_raise_db", 3, "12–20", "1", I], ["pushdown", 3, "10–15", "1", I], ["oh_ext_cable", 2, "10–15", "1", I]] },
         { t: "Тяни", ex: [["pullup", 3, "6–10", "2", B], ["cs_row", 3, "8–12", "2", B], ["pulldown", 3, "10–12", "2", B], ["face_pull", 3, "15–20", "1", I], ["incline_curl", 3, "10–15", "1", I], ["hammer_curl", 2, "10–12", "1", I]] },
-        { t: "Ноги", ex: [["legpress", 3, "8–12", "2", B], ["rdl", 3, "8–10", "2", B], ["legext", 3, "12–15", "1", I], ["seated_curl", 3, "10–12", "1", I], ["calf_stand", 4, "10–15", "1", I], ["deadbug", 3, "6", null, I]] }] }
+        { t: "Ноги", ex: [["legpress", 3, "8–12", "2", B], ["rdl", 3, "8–10", "2", B], ["legext", 3, "12–15", "1", I], ["seated_curl", 3, "10–12", "1", I], ["calf_stand", 4, "10–15", "1", I], ["deadbug", 3, "6", null, I]] }] },
+    { id: "heavylight4", grp: "rot", name: "Тяжёлая и лёгкая · 2 в неделю", rot: { pw: 2, wd: [1, 4] },
+      note: "Две тренировки в неделю по очереди: неделя тяжёлых верха и низа, потом неделя лёгких. Каждая тренировка — раз в две недели, главные движения (жим лёжа и присед) — каждую неделю, в тяжёлом или лёгком варианте.",
+      days: [
+        { t: "Тяжёлый верх", ex: [["bench", 4, "4–6", "1–2", H], ["bb_row", 4, "5–8", "1–2", H], ["pullup_w", 3, "5–8", "2", B], ["seated_db_press", 3, "6–8", "2", B], ["ez_curl", 2, "8–10", "1", I], ["pushdown", 2, "8–10", "1", I]] },
+        { t: "Тяжёлый низ", ex: [["squat", 4, "4–6", "2", H], ["rdl", 3, "6–8", "2", H], ["legpress", 3, "8–10", "2", B], ["seated_curl", 3, "8–10", "1", I], ["calf_stand", 3, "8–12", "1", I], ["ab_wheel", 3, "8–12", "1", I]] },
+        { t: "Лёгкий верх", ex: [["bench", 3, "10–12", "3", B], ["cable_row", 3, "10–12", "2", B], ["pulldown", 3, "10–15", "2", B], ["lat_raise_db", 3, "12–20", "1", I], ["incline_curl", 3, "10–15", "1", I], ["oh_ext_cable", 3, "10–15", "1", I]] },
+        { t: "Лёгкий низ", ex: [["squat", 3, "10–12", "3", B], ["hipthrust", 3, "10–12", "2", B], ["bss", 2, "10–12", "2", B], ["legext", 3, "12–15", "1", I], ["calf_seated", 3, "15–20", "1", I], ["pallof", 3, "10", null, I]] }] },
+    { id: "ulsv4", grp: "simple", name: "Верх / низ: сила и объём · 4 дня", wd: [1, 2, 4, 5],
+      note: "Силовые верх и низ в начале недели — базовые движения на 4–8 повторов; объёмные в конце — другие упражнения на 8–15.",
+      days: [
+        { t: "Силовой верх", ex: [["bench", 4, "4–6", "2", H], ["bb_row", 4, "5–8", "2", B], ["ohp", 3, "5–8", "2", B], ["pullup_w", 3, "5–8", "2", B], ["ez_curl", 2, "8–10", "1", I], ["pushdown", 2, "8–10", "1", I]] },
+        { t: "Силовой низ", ex: [["squat", 4, "4–6", "2", H], ["deadlift", 3, "4–6", "2", H], ["legpress", 3, "8–10", "2", B], ["seated_curl", 3, "8–10", "1", I], ["calf_stand", 4, "8–12", "1", I], ["ab_wheel", 3, "8–12", "1", I]] },
+        { t: "Объёмный верх", ex: [["incline_db", 3, "8–12", "2", B], ["cs_row", 3, "10–12", "2", B], ["machine_press", 3, "10–15", "2", B], ["pulldown", 3, "10–15", "2", B], ["lat_raise_db", 4, "12–20", "1", I], ["incline_curl", 3, "10–15", "1", I], ["oh_ext_cable", 3, "10–15", "1", I]] },
+        { t: "Объёмный низ", ex: [["hack", 3, "10–15", "2", B], ["rdl", 3, "10–12", "2", B], ["bss", 3, "10–12", "2", B], ["legext", 3, "12–15", "1", I], ["seated_curl", 3, "12–15", "1", I], ["calf_seated", 3, "15–20", "1", I]] }] },
+    { id: "bench3", grp: "cyc", name: "Жимовой цикл · 3 дня", wd: [1, 3, 5],
+      note: "Жим лёжа в каждой тренировке, у всех трёх — цикл из 8 шагов с общей разгрузкой на 8-м. Тяжёлая — от 70 % на 6 к 92,5 % на 2, средняя — волна 72,5–80 %, лёгкая — 60–65 %. Проценты — от максимума; его указываешь сам.",
+      days: [
+        { t: "Тяжёлый жим", ex: [["bench", 4, "6", null, H, BENCH8], ["pullup_w", 4, "6–8", "2", B], ["oh_ext_cable", 3, "10–12", "1", I], ["lat_raise_db", 3, "12–20", "1", I], ["face_pull", 2, "15–20", "1", I]] },
+        { t: "Лёгкий жим", ex: [["bench", 4, "8", null, B, BENCH_LIGHT], ["cable_row", 3, "10–12", "2", B], ["legpress", 3, "8–12", "2", B], ["seated_curl", 3, "10–12", "1", I], ["pushdown", 3, "10–15", "1", I], ["incline_curl", 2, "10–15", "1", I]] },
+        { t: "Средний жим", ex: [["bench", 4, "5", null, H, BENCH_MID], ["pulldown", 4, "8–12", "2", B], ["seated_db_press", 3, "8–12", "2", B], ["pushdown", 3, "10–15", "1", I], ["rev_pecdeck", 3, "15–20", "1", I], ["hammer_curl", 2, "10–12", "1", I]] }] },
+    { id: "sbd3", grp: "cyc", name: "Силовой цикл · присед, жим, тяга · 3 дня", wd: [1, 3, 5],
+      note: "Одно главное движение в день, цикл из 6 шагов: 5×5 на 70 % → 3×2 на 90 % и разгрузочный шаг. Плюс 4 подсобных упражнения. Проценты — от максимума; его указываешь сам.",
+      days: [
+        { t: "Присед", ex: [["squat", 5, "5", null, H, SBD6], ["legpress", 3, "8–12", "2", B], ["seated_curl", 3, "10–12", "1", I], ["calf_stand", 3, "10–15", "1", I], ["ab_wheel", 3, "8–12", "1", I]] },
+        { t: "Жим", ex: [["bench", 5, "5", null, H, SBD6], ["ohp", 3, "6–8", "2", B], ["cs_row", 3, "8–12", "2", B], ["pushdown", 3, "10–15", "1", I], ["lat_raise_db", 3, "12–20", "1", I]] },
+        { t: "Тяга", ex: [["deadlift", 5, "5", null, H, SBD6], ["pullup_w", 3, "5–8", "2", B], ["hipthrust", 3, "8–12", "2", B], ["incline_curl", 3, "10–15", "1", I], ["side_plank", 2, "30–45 с", null, I]] }] }
   ];
+  /** Шаги цикла из шаблона: [[подходы, повторы, запас, %], …] → [{ sets, reps, rir?, pct? }]. */
+  const tplCyc = (x) => (Array.isArray(x) ? x.map(([sets, reps, rir, pct]) => Object.assign({ sets, reps }, rir != null ? { rir } : {}, pct != null ? { pct } : {})) : null);
   /** Все id упражнений шаблонов — для проверки, что они есть в программе. */
   const templateExIds = () => Array.from(new Set([].concat(...TEMPLATES.map((t) => [].concat(...t.days.map((d) => d.ex.map((x) => x[0]))))))).sort();
 
@@ -71,17 +112,26 @@
   function blank(o) {
     const n = Math.max(1, Math.min(MAX_DAYS, Math.round(+o.n) || 3)), now = o.now || new Date().toISOString();
     const days = LETTERS.slice(0, n).split("");
-    return { id: o.id || newId(), name: cleanName(o.name) || "Моя программа", base: null, days, wd: wdMap(days, defaultWd(n)), plan: { v: 1, s: {}, x: {} }, created: now, at: now };
+    const rec = { id: o.id || newId(), name: cleanName(o.name) || "Моя программа", base: null, days, wd: wdMap(days, defaultWd(n)), plan: { v: 1, s: {}, x: {} }, created: now, at: now };
+    const pw = Math.round(+o.pw);
+    if (pw >= 1 && pw < n) rec.rot = { pw, wd: defaultWd(pw) };
+    return rec;
   }
   function fromTemplate(tpl, o) {
     const now = o.now || new Date().toISOString(), s = {};
     tpl.days.forEach((d, i) => {
       const L = LETTERS[i];
-      const g = d.ex.map((x, gi) => ({ id: "U" + (gi + 1), kind: "single", tier: "core", rest: x[4], items: [{ ex: x[0], sets: x[1], reps: x[2], rir: x[3] }] }));
+      const g = d.ex.map((x, gi) => {
+        const it = { ex: x[0], sets: x[1], reps: x[2], rir: x[3] }, c = tplCyc(x[5]);
+        if (c) { it.cyc = c; it.sets = c[0].sets; it.reps = c[0].reps; it.rir = c[0].rir != null ? c[0].rir : null; }
+        return { id: "U" + (gi + 1), kind: "single", tier: "core", rest: x[4], items: [it] };
+      });
       s["1" + L] = { g, t: d.t, at: now, ver: o.version || "" };
     });
     const days = LETTERS.slice(0, tpl.days.length).split("");
-    const rec = { id: o.id || newId(), name: cleanName(o.name) || tpl.name, base: null, days, wd: wdMap(days, tpl.wd), plan: { v: 1, s, x: {} }, created: now, at: now };
+    // при чередовании дни недели — у мест в неделе (rot.wd), по буквам — как у «все каждую неделю»
+    const rec = { id: o.id || newId(), name: cleanName(o.name) || tpl.name, base: null, days, wd: wdMap(days, tpl.rot ? defaultWd(days.length) : tpl.wd), plan: { v: 1, s, x: {} }, created: now, at: now };
+    if (tpl.rot) rec.rot = { pw: tpl.rot.pw, wd: normWd(tpl.rot.wd, tpl.rot.pw) };
     const note = cleanNote(o.note != null ? o.note : tpl.note); if (note) rec.note = note;
     return rec;
   }
@@ -92,6 +142,7 @@
       days: src.id === MAIN ? UP_DAYS.slice() : daysOf(src), wd: src.id !== MAIN && src.base == null ? cleanWdMap(src.wd, daysOf(src)) : Array.isArray(src.wd) ? src.wd.slice() : [],
       plan: normPlan(src.plan), created: now, at: now };
     if (src.note) rec.note = cleanNote(src.note);
+    if (src.id !== MAIN && src.base == null) { const r = rotOf(src), tm = cleanTm(src.tm); if (r) rec.rot = Object.assign(r, { o: daysOf(src)[0] }); if (tm) rec.tm = tm; } // копия начинает с недели 1
     return rec;
   }
   const count = (progs) => Object.keys(progs || {}).filter((k) => progs[k] && typeof progs[k] === "object").length;
@@ -118,7 +169,11 @@
     const out = Object.assign(safeCopy(g), { id: str(g.id, 12) || "U" + (i + 1) });
     if (STRENGTH[g.kind]) {
       if (!Array.isArray(g.items)) return null;
-      const cleanIt = (it) => { const o = safeCopy(it); if (o.sets != null) o.sets = Math.max(1, Math.min(10, Math.round(+o.sets) || 1)); ["reps", "rir", "note", "tempo"].forEach((k) => { if (o[k] != null && typeof o[k] !== "string") o[k] = String(o[k]).slice(0, 40); }); return o; };
+      const cleanIt = (it) => {
+        const o = safeCopy(it); if (o.sets != null) o.sets = Math.max(1, Math.min(10, Math.round(+o.sets) || 1)); ["reps", "rir", "note", "tempo"].forEach((k) => { if (o[k] != null && typeof o[k] !== "string") o[k] = String(o[k]).slice(0, 40); });
+        if (o.cyc != null) { const c = cleanCyc(o.cyc); if (c && !o.hl && !o.weekAlt) o.cyc = c; else delete o.cyc; }
+        return o;
+      };
       out.items = g.items.filter((it) => isObj(it) && (typeof it.ex === "string" || (Array.isArray(it.weekAlt) && it.weekAlt.every((w) => isObj(w) && typeof w.ex === "string")))).map(cleanIt);
       if (!["core", "std", "max"].includes(out.tier)) out.tier = "core";
       if (out.rest != null && typeof out.rest !== "string") delete out.rest;
@@ -164,6 +219,10 @@
       created: str(rec.created, 40) || str(rec.at, 40), at: str(rec.at, 40) });
     const note = typeof rec.note === "string" ? cleanNote(rec.note) : "";
     if (note) out.note = note; else delete out.note;
+    // чередование (своя программа, pw 1 … n−1) и максимумы для процентов цикла нагрузки
+    const rot = base ? null : rotOf(out); if (rot) out.rot = rot; else delete out.rot;
+    if (!base && Number.isInteger(rec.qa) && rec.qa >= 0 && rec.qa <= 10000) out.qa = rec.qa; else delete out.qa;
+    const tm = cleanTm(rec.tm); if (tm) out.tm = tm; else delete out.tm;
     return out;
   }
   /** Все записи из ключа progs: только годные (по id и содержимому). */
@@ -221,7 +280,10 @@
     // дни недели — по буквам: у остальных тренировок не меняются
     const wd = cleanWdMap(rec.wd, d), wdL = wd[L] != null ? wd[L] : null;
     delete wd[L];
-    return { rec: patch(rec, { days, plan, wd }, now), removed: { d: L, s: s ? clone(s) : null, wd: wdL } };
+    // чередование: тренировок стало столько же, сколько «в неделю», — чередование выключается (все каждую неделю)
+    const r = rotOf(rec), out = patch(rec, { days, plan, wd }, now);
+    if (r && r.pw >= days.length) delete out.rot;
+    return { rec: out, removed: { d: L, s: s ? clone(s) : null, wd: wdL, rot: r ? clone(r) : null } };
   }
   /** Вернуть удалённую тренировку (отмена): буква, содержимое и название, день недели. */
   function restoreDay(rec, removed, now) {
@@ -234,7 +296,9 @@
     const wd = cleanWdMap(rec.wd, d);
     // свой день возвращается, если его пока никто не занял
     if (removed.wd != null && !Object.values(wd).includes(removed.wd)) wd[removed.d] = removed.wd;
-    return { rec: patch(rec, { days, plan, wd }, now) };
+    const out = patch(rec, { days, plan, wd }, now);
+    if (removed.rot && removed.rot.pw < days.length) out.rot = clone(removed.rot);
+    return { rec: out };
   }
   /** Расписание: дней недели не больше, чем тренировок; по порядку недели (с понедельника). */
   const monFirst = (x) => (x + 6) % 7;
@@ -258,6 +322,114 @@
   function normWd(wd, n) {
     const out = Array.from(new Set((wd || []).map(Number).filter((x) => x >= 0 && x <= 6)));
     return out.sort((a, b) => monFirst(a) - monFirst(b)).slice(0, n);
+  }
+
+  /* ---- чередование: тренировок в неделю (pw) меньше, чем тренировок в программе (n) ----
+     rec.rot = { pw, wd, o }: очередь — буквы по алфавиту по кругу; wd — дни недели мест в неделе (с понедельника): j-й день ↔ j-я
+     тренировка недели; rec.wd (по буквам) не трогаем. Правила (pw, набор тренировок) действуют с недели rec.qa: очередь недели
+     idx ≥ qa — D[(indexOf(o) + (idx − qa)·pw + j) % n], o — буква, с которой начинается неделя qa. Недели раньше qa — «мягкие»:
+     их очередь не показывается, сделана — если записана хоть одна тренировка (смена правил не переписывает прошлое). */
+  const isDay = (x) => (typeof x === "number" || (typeof x === "string" && /^\d$/.test(x))) && Number.isInteger(+x) && +x >= 0 && +x <= 6;
+  /** Нормализованное { pw, wd, o } или null (не своя программа, нет поля, pw вне 1 … n−1). */
+  function rotOf(rec) {
+    if (!isCustom(rec) || !isObj(rec.rot)) return null;
+    const D = daysOf(rec), n = D.length, pw = Math.round(+rec.rot.pw);
+    if (!Number.isFinite(pw) || pw < 1 || pw >= n) return null;
+    return { pw, wd: normWd((Array.isArray(rec.rot.wd) ? rec.rot.wd : []).filter(isDay), pw), o: D.includes(rec.rot.o) ? rec.rot.o : D[0] };
+  }
+  /** С какой недели действуют нынешние правила своей программы (0 — с начала). */
+  const qaOf = (rec) => { const v = rec && rec.qa; return Number.isInteger(v) && v >= 0 ? v : 0; };
+  /** Неделя idx раньше смены правил: её очередь неизвестна, «сделана» — если записана хоть одна тренировка. */
+  const softWeek = (rec, idx) => isCustom(rec) && idx < qaOf(rec);
+  /** Тренировки недели idx: при чередовании — pw букв очереди, иначе все. */
+  function weekDays(rec, idx) {
+    const D = daysOf(rec), r = rotOf(rec);
+    if (!r) return D;
+    const n = D.length, b = D.indexOf(r.o), off = (idx - qaOf(rec)) * r.pw, out = [];
+    for (let j = 0; j < r.pw; j++) out.push(D[(((b + off + j) % n) + n) % n]);
+    return out;
+  }
+  /** Первая буква программы rec начиная с L по алфавиту по кругу. */
+  function nextLetter(rec, L) {
+    const D = daysOf(rec), i = LETTERS.indexOf(L);
+    for (let k = 0; k < LETTERS.length; k++) { const x = LETTERS[(i + k) % LETTERS.length]; if (D.includes(x)) return x; }
+    return D[0];
+  }
+  /** Сменились правила (в неделю, добавили или удалили тренировку): новые действуют с недели qa, прошлое не переписывается.
+      Очередь недели qa начинается с первой буквы прежней очереди этой недели (удалили — со следующей; не было чередования — с A). */
+  function rebase(old, rec, qa) {
+    const out = Object.assign({}, rec, { qa: Math.max(0, Math.round(+qa) || 0) });
+    if (rotOf(out)) {
+      const o0 = rotOf(old) ? weekDays(old, qa)[0] : "A";
+      out.rot = Object.assign({}, out.rot, { o: nextLetter(out, o0) });
+    }
+    return out;
+  }
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  /** Длина круга в неделях: через сколько недель очередь снова начнётся с A. */
+  function roundWeeks(rec) { const r = rotOf(rec); if (!r) return 1; const n = daysOf(rec).length; return n / gcd(n, r.pw); }
+  /** Тренировок в неделю: pw ≥ n — чередование выключается (rec.wd по буквам снова в силе). Дни мест — прежние или по умолчанию. */
+  function setRot(rec, pw, now) {
+    if (!isCustom(rec)) return { error: "Чередование — только у своей программы." };
+    const n = daysOf(rec).length, v = Math.max(1, Math.min(n, Math.round(+pw) || n));
+    const out = patch(rec, {}, now);
+    if (v >= n) { delete out.rot; return { rec: out }; }
+    // дни мест: прежние; включаем впервые — уже назначенные тренировкам дни по порядку недели (меньше — остальные «любой день»)
+    const old = rotOf(rec), base = old ? old.wd : Object.values(cleanWdMap(rec.wd, daysOf(rec)));
+    out.rot = { pw: v, wd: normWd(base, v), o: old ? old.o : daysOf(rec)[0] };
+    return { rec: out };
+  }
+  /** Дни недели мест при чередовании: не больше pw, по порядку недели. */
+  function setRotWd(rec, wd, now) {
+    const r = rotOf(rec);
+    if (!r) return { error: "Чередование выключено." };
+    return { rec: patch(rec, { rot: { pw: r.pw, wd: normWd((wd || []).filter(isDay), r.pw), o: r.o } }, now) };
+  }
+  /** Максимумы для процентов цикла нагрузки: { exId: кг } — 1–1000 кг, шаг 0,5; пустое — null. */
+  function cleanTm(tm) {
+    if (!isObj(tm)) return null;
+    const out = {};
+    Object.keys(tm).forEach((k) => {
+      // только id упражнений: латиница, цифры, «_»; без имён Object.prototype и __proto__
+      if (!/^[a-z0-9_]{1,40}$/.test(k) || k === "__proto__" || Object.prototype.hasOwnProperty.call(Object.prototype, k)) return;
+      const v = +String(tm[k]).replace(",", ".");
+      if (Number.isFinite(v) && v >= 1 && v <= 1000) out[k] = Math.round(v * 2) / 2;
+    });
+    return Object.keys(out).length ? out : null;
+  }
+  /** Максимум упражнения: kg — число или null (убрать). */
+  function setTm(rec, exId, kg, now) {
+    const tm = Object.assign({}, cleanTm(rec.tm) || {});
+    if (kg == null || kg === "") delete tm[exId]; else tm[exId] = kg;
+    const c = cleanTm(tm), out = patch(rec, {}, now);
+    if (c) out.tm = c; else delete out.tm;
+    return { rec: out };
+  }
+  /** Целевой вес шага: pct × максимум / 100, до 2,5 кг (максимум меньше 40 кг — до 1 кг). */
+  function stepWeight(pct, tm) {
+    if (!(pct > 0) || !(tm > 0)) return null;
+    const raw = (pct * tm) / 100, st = tm < 40 ? 1 : 2.5;
+    if (raw < st) return null; // меньше шага округления — веса нет, только процент
+    return Math.round(raw / st) * st;
+  }
+  /** Цикл нагрузки пункта: шаги { sets 1–10, reps — строка, rir?, pct? 30–110 }. Лишние сверх 12 отрезаются, битые шаги (не объект,
+      без повторов) отбрасываются по одному, процент вне границ — тоже; годных меньше двух — цикла нет (null). */
+  const CYC_MIN = 2, CYC_MAX = 12;
+  const dash = (v) => String(v).replace(/(\d)\s*[-—–]\s*(\d)/g, "$1–$2");
+  function cleanCyc(c) {
+    if (!Array.isArray(c)) return null;
+    const out = [];
+    c.slice(0, CYC_MAX).forEach((x) => {
+      if (!isObj(x)) return;
+      const sets = Math.round(+x.sets), reps = x.reps == null ? "" : dash(String(x.reps).trim()).slice(0, 20);
+      if (!Number.isFinite(sets) || !reps) return;
+      const st = { sets: Math.max(1, Math.min(10, sets)), reps };
+      if (x.rir != null && String(x.rir).trim() !== "") st.rir = String(x.rir).trim().slice(0, 8);
+      const pct = x.pct == null || x.pct === "" ? NaN : +String(x.pct).replace(",", ".");
+      if (Number.isFinite(pct) && pct >= 30 && pct <= 110) st.pct = Math.round(pct * 2) / 2;
+      out.push(st);
+    });
+    return out.length >= CYC_MIN ? out : null;
   }
 
   /* ---- место в цикле ---- */
@@ -306,6 +478,6 @@
   }
 
   window.Programs = { MAIN, MAX, NAME_MAX, NOTE_MAX, MAX_DAYS, LETTERS, ID_RE, TEMPLATES, templateExIds, newId, cleanName, cleanNote, isCustom, kind, daysOf, defaultWd,
-    blank, fromTemplate, copyOf, count, add, remove, patch, addDay, removeDay, restoreDay, normWd, cleanWdMap, setWd, posOf, current, curOf, sessionsFor, bind, injectX,
+    blank, fromTemplate, copyOf, rotOf, weekDays, qaOf, softWeek, rebase, roundWeeks, cleanCyc, CYC_MIN, CYC_MAX, setRot, setRotWd, cleanTm, setTm, stepWeight, count, add, remove, patch, addDay, removeDay, restoreDay, normWd, cleanWdMap, setWd, posOf, current, curOf, sessionsFor, bind, injectX,
     sanitize, sanitizeAll, cleanPlan, cleanPos, cleanPosAll, logKey, parseLogKey };
 })();
